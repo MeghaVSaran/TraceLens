@@ -1,4 +1,9 @@
 Random_or_Additional_stuff/
+docs/
+colab_tests/
+Current System Summary
+LLM_PROJECT_CONTEXT.md
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
