@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from src.analysis.compile_commands import CompileCommandsIndex
+from src.analysis.symbol_locator import locate_symbol_sites
 from src.retrieval.hybrid_retriever import RetrievalResult
 
 
@@ -114,9 +115,21 @@ class FailureDiagnoser:
         symbol = self._first_identifier(parsed_log)
         decl = self._find_matching_result(results, symbol, suffixes=HEADER_SUFFIXES)
         definition = self._find_matching_result(results, symbol, suffixes=SOURCE_SUFFIXES)
+        repo_sites = self._lookup_symbol_sites(symbol, primary_files)
+        decl_site = repo_sites.get("declaration")
+        def_site = repo_sites.get("definition")
         summary = f"Linker failure around {symbol or 'an unresolved symbol'}."
 
-        if decl and definition:
+        if decl_site and def_site:
+            likely_cause = (
+                f"{symbol or 'The symbol'} appears declared in {decl_site.file_path} and defined in "
+                f"{def_site.file_path}, which strongly suggests the defining object or library is missing from the failing link."
+            )
+            suggested_fix = (
+                "Check the target or library dependencies for the failing binary and ensure the definition file's object is linked."
+            )
+            confidence = "high"
+        elif decl and definition:
             likely_cause = (
                 f"{symbol or 'The symbol'} appears declared in {decl.file_path} and implemented in "
                 f"{definition.file_path}, which usually means the defining object/library is not linked into the failing target."
@@ -142,9 +155,13 @@ class FailureDiagnoser:
         evidence = self._common_evidence(parsed_log, results, compile_entry)
         if symbol:
             evidence.insert(0, f"Linker symbol: {symbol}")
-        if decl:
+        if decl_site:
+            evidence.append(f"Repo declaration site: {decl_site.file_path}:{decl_site.line_number}")
+        elif decl:
             evidence.append(f"Header candidate: {decl.file_path}:{decl.start_line}")
-        if definition:
+        if def_site:
+            evidence.append(f"Repo definition site: {def_site.file_path}:{def_site.line_number}")
+        elif definition:
             evidence.append(f"Definition candidate: {definition.file_path}:{definition.start_line}")
 
         return DiagnosisReport(
@@ -338,3 +355,13 @@ class FailureDiagnoser:
         except ValueError:
             return False
         return candidate.exists()
+
+    def _lookup_symbol_sites(self, symbol: str, candidate_files: list[str]) -> dict:
+        """Resolve declaration/definition sites using a repo scan when possible."""
+        if self.repo_root is None or not symbol:
+            return {"declaration": None, "definition": None}
+        return locate_symbol_sites(
+            self.repo_root,
+            symbol,
+            candidate_files=candidate_files,
+        )

@@ -26,6 +26,16 @@ def _result(file_path, function_name, start_line=1, score=0.9, symbol_name=""):
 def test_linker_diagnosis_mentions_declaration_and_definition(tmp_path):
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
+    include_dir = repo_root / "absl" / "strings"
+    include_dir.mkdir(parents=True)
+    (include_dir / "str_cat.h").write_text(
+        "namespace absl { std::string StrCat(); }\n",
+        encoding="utf-8",
+    )
+    (include_dir / "str_cat.cc").write_text(
+        "namespace absl { std::string StrCat() { return {}; } }\n",
+        encoding="utf-8",
+    )
     db_path = repo_root / "compile_commands.json"
     db_path.write_text(
         json.dumps([
@@ -55,6 +65,7 @@ def test_linker_diagnosis_mentions_declaration_and_definition(tmp_path):
     assert diagnosis.confidence == "high"
     assert "declared" in diagnosis.likely_cause
     assert "absl/strings/str_cat.cc" in " ".join(diagnosis.evidence)
+    assert any("Repo declaration site" in item for item in diagnosis.evidence)
 
 
 def test_include_diagnosis_uses_compile_command_context(tmp_path):
