@@ -5,7 +5,9 @@ from dataclasses import dataclass
 from src.evaluation.run_ablation import (
     SampleResult,
     _collect_ground_truth_coverage,
+    _count_test_ground_truth_samples,
     _has_all_ground_truth_files,
+    _is_test_like_path,
     _to_strict_pathless_parsed,
     build_ablation_report,
     run_single_config,
@@ -162,3 +164,15 @@ def test_ground_truth_coverage_helpers(tmp_path):
     in_repo, missing_paths = _collect_ground_truth_coverage([present, missing], tmp_path)
     assert in_repo == 1
     assert missing_paths["absl/base/missing.cc"] == 1
+
+
+def test_test_ground_truth_sample_counter():
+    dataset = [
+        {"relevant_files": ["absl/base/internal/raw_logging.cc"]},
+        {"relevant_files": ["absl/synchronization/mutex_test.cc", "absl/synchronization/mutex.h"]},
+        {"relevant_files": ["absl/container/benchmarks/raw_hash_set_benchmark.cc"]},
+    ]
+
+    assert _is_test_like_path("absl/synchronization/mutex_test.cc") is True
+    assert _is_test_like_path("absl/base/internal/raw_logging.cc") is False
+    assert _count_test_ground_truth_samples(dataset) == 2

@@ -166,6 +166,27 @@ def _has_all_ground_truth_files(item: Dict, repo_path: Path) -> bool:
     return all((repo_path / rel).exists() for rel in gt_files)
 
 
+def _is_test_like_path(path: str) -> bool:
+    """Return True when a path looks like test or benchmark code."""
+    value = str(path or "").replace("\\", "/").lower()
+    return any(
+        marker in value
+        for marker in (
+            "_test.", "_unittest.", "test_", "/test/", "/tests/",
+            "_benchmark.", "_bench.", "benchmark/",
+        )
+    )
+
+
+def _count_test_ground_truth_samples(dataset: List[Dict]) -> int:
+    """Count samples whose ground truth includes test/benchmark files."""
+    return sum(
+        1
+        for item in dataset
+        if any(_is_test_like_path(path) for path in item.get("relevant_files", []))
+    )
+
+
 def _collect_ground_truth_coverage(
     dataset: List[Dict],
     repo_path: Path,
@@ -595,6 +616,7 @@ def main():
     index_backend = index_meta.get("embedding_backend", "unknown")
     log_embedder_backend = "mpnet"  # LogEmbedder always uses mpnet
     dense_valid = (index_backend == log_embedder_backend)
+    include_tests = bool(index_meta.get("include_tests", False))
 
     if not dense_valid:
         print(f"\n⚠ WARNING: Index was built with '{index_backend}' embeddings, "
@@ -621,6 +643,17 @@ def main():
         if not dataset:
             print("No samples left after --repo-filter; exiting.", file=sys.stderr)
             sys.exit(1)
+
+    test_gt_samples = _count_test_ground_truth_samples(dataset)
+    if test_gt_samples and not include_tests:
+        print(
+            f"Warning: {test_gt_samples}/{len(dataset)} samples have test/benchmark "
+            "ground-truth files, but this index was built without --include-tests."
+        )
+        print(
+            "  Realistic GitHub/test-failure evaluation may be unfairly low; "
+            "re-index with --include-tests for that slice."
+        )
 
     in_repo, missing_paths = _collect_ground_truth_coverage(dataset, repo_path)
 
@@ -711,6 +744,8 @@ def main():
         "repo_filter": args.repo_filter,
         "strict_pathless": bool(args.strict_pathless),
         "skip_missing_ground_truth": bool(args.skip_missing_ground_truth),
+        "index_include_tests": include_tests,
+        "test_ground_truth_samples": test_gt_samples,
     }
 
     # Output directory

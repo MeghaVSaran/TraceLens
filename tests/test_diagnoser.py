@@ -154,6 +154,8 @@ def test_external_linker_symbol_is_treated_as_system_library_issue():
     assert diagnosis.error_type == "linker_error"
     assert "external runtime or system-library symbol" in diagnosis.likely_cause
     assert any("external/system-library" in item for item in diagnosis.evidence)
+    assert not any("Definition provider target" in item for item in diagnosis.evidence)
+    assert not any("Definition candidate" in item for item in diagnosis.evidence)
 
 
 def test_linker_target_hint_is_used_when_compile_entry_mapping_is_missing(tmp_path):
@@ -240,7 +242,10 @@ def test_linker_diagnosis_does_not_claim_missing_edge_when_provider_is_transitiv
     diagnosis = diagnoser.diagnose(parsed, results)
 
     assert "does not appear to link" not in diagnosis.likely_cause
+    assert "already reaches" in diagnosis.likely_cause
+    assert diagnosis.confidence == "medium"
     assert any("Definition provider target(s): provider" in item for item in diagnosis.evidence)
+    assert any("Build graph: app reaches provider target(s)." in item for item in diagnosis.evidence)
 
 
 def test_linker_diagnosis_prefers_header_declaration_over_test_invocation(tmp_path):

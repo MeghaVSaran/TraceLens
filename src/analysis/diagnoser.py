@@ -141,9 +141,11 @@ class FailureDiagnoser:
             definition_result=definition,
             definition_site=def_site,
         )
+        symbol_is_external = self._is_external_linker_symbol(symbol, decl_site, def_site)
+        target_reaches_provider = self._target_links_any(failing_target, provider_targets)
         summary = f"Linker failure around {symbol or 'an unresolved symbol'}."
 
-        if self._is_external_linker_symbol(symbol, decl_site, def_site):
+        if symbol_is_external:
             likely_cause = (
                 f"{symbol or 'The unresolved symbol'} looks like an external runtime or system-library symbol rather than a repo-owned C++ symbol."
             )
@@ -151,7 +153,7 @@ class FailureDiagnoser:
                 "Check linker flags and system-library dependencies for the failing target, such as math, pthread, dl, or C++ runtime linkage."
             )
             confidence = "high"
-        elif failing_target and provider_targets and not self._target_links_any(failing_target, provider_targets):
+        elif failing_target and provider_targets and not target_reaches_provider:
             provider_names = ", ".join(provider.name for provider in provider_targets)
             likely_cause = (
                 f"{symbol or 'The symbol'} resolves to provider target(s) {provider_names}, but the failing target "
@@ -161,6 +163,16 @@ class FailureDiagnoser:
                 f"Add the provider target to target_link_libraries({failing_target.name} ...) or otherwise route its object/library into the link step."
             )
             confidence = "high"
+        elif failing_target and provider_targets and target_reaches_provider:
+            provider_names = ", ".join(provider.name for provider in provider_targets)
+            likely_cause = (
+                f"{symbol or 'The symbol'} resolves to provider target(s) {provider_names}, and the current CMake graph shows "
+                f"{failing_target.name} already reaches them. This points away from a simple missing target_link_libraries edge."
+            )
+            suggested_fix = (
+                "Compare the failing build's actual link command and repo revision against the indexed source; check conditional CMake options, stale build files, and whether the failing environment uses an older target graph."
+            )
+            confidence = "medium"
         elif decl_site and def_site:
             likely_cause = (
                 f"{symbol or 'The symbol'} appears declared in {decl_site.file_path} and defined in "
@@ -196,24 +208,29 @@ class FailureDiagnoser:
         evidence = self._common_evidence(parsed_log, results, compile_entry)
         if symbol:
             evidence.insert(0, f"Linker symbol: {symbol}")
-        if self._is_external_linker_symbol(symbol, decl_site, def_site):
+        if symbol_is_external:
             evidence.append("Symbol classified as external/system-library style.")
-        if decl_site:
+        if not symbol_is_external and decl_site:
             evidence.append(f"Repo declaration site: {decl_site.file_path}:{decl_site.line_number}")
-        elif decl:
+        elif not symbol_is_external and decl:
             evidence.append(f"Header candidate: {decl.file_path}:{decl.start_line}")
-        if def_site:
+        if not symbol_is_external and def_site:
             evidence.append(f"Repo definition site: {def_site.file_path}:{def_site.line_number}")
-        elif definition:
+        elif not symbol_is_external and definition:
             evidence.append(f"Definition candidate: {definition.file_path}:{definition.start_line}")
         if failing_target:
             evidence.append(f"Failing source appears in target: {failing_target.name}")
         elif getattr(parsed_log, "build_targets", []):
             evidence.append("Build target hint(s) from log: " + ", ".join(parsed_log.build_targets))
-        if provider_targets:
+        if not symbol_is_external and provider_targets:
             evidence.append(
                 "Definition provider target(s): " + ", ".join(target.name for target in provider_targets)
             )
+            if failing_target:
+                relation = "reaches" if target_reaches_provider else "does not reach"
+                evidence.append(
+                    f"Build graph: {failing_target.name} {relation} provider target(s)."
+                )
 
         return DiagnosisReport(
             error_type=parsed_log.error_type,

@@ -29,6 +29,7 @@ FILE_HINT_CANDIDATES = 20
 TEST_PATH_HINTS = (
     "_test.", "_unittest.", "test_", "/test/", "/tests/", "_benchmark.", "_bench.",
 )
+TEST_FILE_PENALTY = 0.18
 
 
 @dataclass
@@ -610,7 +611,7 @@ class HybridRetriever:
 
         for result in results:
             if self._is_test_like_path(result.file_path):
-                result.score = max(0.0, result.score - 0.08)
+                result.score = max(0.0, result.score - TEST_FILE_PENALTY)
         return results
 
     def _normalize_symbol(self, value: str) -> str:
