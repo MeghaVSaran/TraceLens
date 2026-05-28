@@ -3,7 +3,8 @@
 **ML-Assisted Log–Code Correlation Engine**
 
 Maps C++ build and runtime error logs to the most relevant source files and
-functions using semantic embeddings and hybrid retrieval.
+functions using semantic embeddings, hybrid retrieval, and early Phase 2
+build-aware triage.
 
 ## What It Does
 
@@ -30,7 +31,8 @@ Top matches:
 3. **Log Parsing** — Regex extracts error type, symbol names, and file hints
 4. **Log Embedding** — all-mpnet-base-v2 converts log into a 768-dim vector
 5. **Hybrid Retrieval** — Dense (ChromaDB) + Sparse (BM25) search, score fusion
-6. **Ranked Output** — Top-K files and functions returned with scores
+6. **Diagnosis Layer** — Optional compile_commands-aware findings for include/link/build failures
+7. **Ranked Output** — Top-K files and functions returned with scores
 
 ## Install
 
@@ -46,6 +48,12 @@ debugaid index --repo ./llvm-project
 
 # Query with a log file
 debugaid query --log build.log --repo ./llvm-project
+
+# Query with diagnosis if compile_commands.json is available
+debugaid query --log build.log --repo ./llvm-project --diagnose --build-dir ./build
+
+# Wrap a failing build/test command and auto-triage it
+debugaid watch --repo ./llvm-project --build-dir ./build -- make -j8
 
 # Evaluate on ground truth dataset
 debugaid eval --dataset data/ground_truth/dev.json --repo ./llvm-project
@@ -72,6 +80,7 @@ debugaid info --repo ./llvm-project
 - Include errors (`no such file or directory`)
 - Template errors (`implicit instantiation`)
 - Segfault stack traces
+- Build-system errors / compile database aware triage
 
 ## Project Structure
 

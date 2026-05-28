@@ -4,6 +4,7 @@ DebugAid CLI — main entry point.
 Commands:
   debugaid index  --repo PATH [--force-reindex]
   debugaid query  --log PATH --repo PATH [--top-k N] [--verbose] [--output json|text]
+  debugaid watch  --repo PATH -- <build-or-test command>
   debugaid eval   --dataset PATH --repo PATH
   debugaid info   --repo PATH
 
@@ -15,6 +16,7 @@ import json
 import sys
 import time
 import logging
+import subprocess
 from pathlib import Path
 from datetime import datetime
 
@@ -25,6 +27,15 @@ DEBUGAID_DIR = ".debugaid"
 CHROMA_DIR = "chroma"
 BM25_FILE = "bm25.pkl"
 METADATA_FILE = "index_meta.json"
+
+
+def _require_index(repo_path: Path) -> Path:
+    """Return the debugaid index path or exit with a helpful message."""
+    debugaid_path = repo_path / DEBUGAID_DIR
+    if not debugaid_path.exists():
+        click.echo("No index found. Run 'debugaid index --repo .' first.", err=True)
+        sys.exit(1)
+    return debugaid_path
 
 
 def _load_index_metadata(debugaid_path: Path) -> dict:
@@ -40,6 +51,115 @@ def _save_index_metadata(debugaid_path: Path, meta: dict) -> None:
     meta_path = debugaid_path / METADATA_FILE
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2)
+
+
+def _load_compile_commands_index(repo_path: Path, build_dir: str | None = None):
+    """Best-effort load of compile_commands.json for build-aware diagnosis."""
+    from src.analysis.compile_commands import CompileCommandsIndex, discover_compile_commands
+
+    compile_commands_path = discover_compile_commands(
+        repo_path,
+        build_dir=Path(build_dir).resolve() if build_dir else None,
+    )
+    if compile_commands_path is None:
+        return None, None
+    return (
+        CompileCommandsIndex.from_file(compile_commands_path, repo_root=repo_path),
+        compile_commands_path,
+    )
+
+
+def _triage_log(
+    repo_path: Path,
+    log_text: str,
+    top_k: int,
+    build_dir: str | None = None,
+    diagnose: bool = False,
+):
+    """Shared log-to-results pipeline used by query and watch modes."""
+    debugaid_path = _require_index(repo_path)
+
+    from src.ingestion.log_parser import parse_log, extract_source_paths
+    from src.indexing.vector_index import VectorIndex
+    from src.indexing.bm25_index import BM25Index
+    from src.embeddings.log_embedder import LogEmbedder
+    from src.retrieval.hybrid_retriever import HybridRetriever
+
+    parsed_log = parse_log(log_text, repo_root=repo_path)
+    source_paths = parsed_log.source_paths or extract_source_paths(log_text, repo_root=repo_path)
+
+    vector_index = VectorIndex(debugaid_path / CHROMA_DIR)
+    bm25_index = BM25Index()
+    bm25_index.load(debugaid_path / BM25_FILE)
+
+    log_embedder = LogEmbedder()
+    log_embedding = log_embedder.embed_log(parsed_log)
+
+    retriever = HybridRetriever(vector_index, bm25_index)
+    results = retriever.retrieve(
+        log_embedding,
+        parsed_log.query_text(),
+        top_k=top_k,
+        source_paths=source_paths,
+        parsed_log=parsed_log,
+    )
+
+    diagnosis = None
+    compile_commands_path = None
+    if diagnose:
+        from src.analysis.diagnoser import FailureDiagnoser
+
+        compile_commands, compile_commands_path = _load_compile_commands_index(
+            repo_path,
+            build_dir=build_dir,
+        )
+        diagnoser = FailureDiagnoser(
+            repo_root=repo_path,
+            compile_commands=compile_commands,
+        )
+        diagnosis = diagnoser.diagnose(parsed_log, results)
+
+    return parsed_log, results, diagnosis, compile_commands_path
+
+
+def _format_diagnosis_text(diagnosis) -> list[str]:
+    """Render a diagnosis block for terminal output."""
+    if diagnosis is None:
+        return []
+    lines = [
+        "Diagnosis:",
+        f"  Summary:         {diagnosis.summary}",
+        f"  Likely cause:    {diagnosis.likely_cause}",
+        f"  Suggested fix:   {diagnosis.suggested_fix}",
+        f"  Confidence:      {diagnosis.confidence}",
+    ]
+    if diagnosis.compile_command_file:
+        lines.append(f"  Compile context: {diagnosis.compile_command_file}")
+    if diagnosis.evidence:
+        lines.append("  Evidence:")
+        for item in diagnosis.evidence:
+            lines.append(f"    - {item}")
+    return lines
+
+
+def _run_command_capture(command: tuple[str, ...], stream_output: bool = True) -> tuple[int, str]:
+    """Run a subprocess, optionally streaming merged stdout/stderr."""
+    process = subprocess.Popen(
+        list(command),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    output_lines: list[str] = []
+    assert process.stdout is not None
+    for line in process.stdout:
+        output_lines.append(line)
+        if stream_output:
+            click.echo(line.rstrip("\n"))
+    return_code = process.wait()
+    return return_code, "".join(output_lines)
 
 
 # ------------------------------------------------------------------
@@ -155,49 +275,23 @@ def index(repo, force_reindex, device, include_tests, embedding_model):
 @click.option("--top-k", default=5, show_default=True, help="Number of results to return.")
 @click.option("--verbose", is_flag=True, default=False, help="Show scores and matched code snippets.")
 @click.option("--output", default="text", type=click.Choice(["text", "json"]), help="Output format.")
-def query(log_path, repo, top_k, verbose, output):
+@click.option("--diagnose", is_flag=True, default=False, help="Add build-aware diagnosis if compile_commands.json is available.")
+@click.option("--build-dir", default=None, type=click.Path(exists=True), help="Optional build directory containing compile_commands.json.")
+def query(log_path, repo, top_k, verbose, output, diagnose, build_dir):
     """Query: given a log file, return the most likely source files."""
     try:
         repo_path = Path(repo).resolve()
-        debugaid_path = repo_path / DEBUGAID_DIR
-
-        if not debugaid_path.exists():
-            click.echo("No index found. Run 'debugaid index --repo .' first.", err=True)
-            sys.exit(1)
+        _require_index(repo_path)
 
         # 1. Read log file.
         log_text = Path(log_path).read_text(encoding="utf-8", errors="replace")
 
-        # 2. Parse log.
-        from src.ingestion.log_parser import parse_log, extract_source_paths
-
-        parsed_log = parse_log(log_text, repo_root=repo_path)
-        source_paths = parsed_log.source_paths or extract_source_paths(log_text, repo_root=repo_path)
-
-        # 3. Load indices.
-        from src.indexing.vector_index import VectorIndex
-        from src.indexing.bm25_index import BM25Index
-
-        vector_index = VectorIndex(debugaid_path / CHROMA_DIR)
-        bm25_index = BM25Index()
-        bm25_index.load(debugaid_path / BM25_FILE)
-
-        # 4. Embed log.
-        from src.embeddings.log_embedder import LogEmbedder
-
-        log_embedder = LogEmbedder()
-        log_embedding = log_embedder.embed_log(parsed_log)
-
-        # 5. Retrieve.
-        from src.retrieval.hybrid_retriever import HybridRetriever
-
-        retriever = HybridRetriever(vector_index, bm25_index)
-        results = retriever.retrieve(
-            log_embedding,
-            parsed_log.query_text(),
+        parsed_log, results, diagnosis, compile_commands_path = _triage_log(
+            repo_path=repo_path,
+            log_text=log_text,
             top_k=top_k,
-            source_paths=source_paths,
-            parsed_log=parsed_log,
+            build_dir=build_dir,
+            diagnose=diagnose,
         )
 
         if not results:
@@ -219,10 +313,22 @@ def query(log_path, repo, top_k, verbose, output):
                 }
                 for r in results
             ]
-            click.echo(json.dumps(json_results, indent=2))
+            if diagnose:
+                payload = {
+                    "error_type": parsed_log.error_type,
+                    "query": parsed_log.query_text(),
+                    "compile_commands_path": str(compile_commands_path) if compile_commands_path else "",
+                    "diagnosis": diagnosis.to_dict() if diagnosis else None,
+                    "results": json_results,
+                }
+                click.echo(json.dumps(payload, indent=2))
+            else:
+                click.echo(json.dumps(json_results, indent=2))
         else:
             click.echo(f"\nError type: {parsed_log.error_type}")
             click.echo(f"Query: {parsed_log.query_text()[:120]}")
+            if diagnose and compile_commands_path:
+                click.echo(f"Compile DB: {compile_commands_path}")
             click.echo(f"\nTop {len(results)} results:\n")
 
             for r in results:
@@ -233,9 +339,105 @@ def query(log_path, repo, top_k, verbose, output):
                                f"(dense={r.dense_score:.4f}, bm25={r.bm25_score:.4f}, "
                                f"symbol={r.symbol_score:.4f})")
                 click.echo()
+            if diagnose:
+                click.echo()
+                for line in _format_diagnosis_text(diagnosis):
+                    click.echo(line)
 
     except Exception as exc:
         click.echo(f"Error during query: {exc}", err=True)
+        sys.exit(1)
+
+
+# ------------------------------------------------------------------
+# WATCH command
+# ------------------------------------------------------------------
+
+@cli.command(
+    context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
+)
+@click.option("--repo", required=True, type=click.Path(exists=True), help="Path to indexed C++ repository.")
+@click.option("--top-k", default=5, show_default=True, help="Number of ranked files to surface.")
+@click.option("--build-dir", default=None, type=click.Path(exists=True), help="Optional build directory containing compile_commands.json.")
+@click.option("--output", default="text", type=click.Choice(["text", "json"]), help="Output format.")
+@click.option("--quiet-build-output", is_flag=True, default=False, help="Do not stream command output live before diagnosis.")
+@click.argument("command", nargs=-1, type=click.UNPROCESSED)
+def watch(repo, top_k, build_dir, output, quiet_build_output, command):
+    """Run a build/test command, then triage failures automatically."""
+    try:
+        repo_path = Path(repo).resolve()
+        _require_index(repo_path)
+
+        if not command:
+            click.echo("No command provided. Usage: debugaid watch --repo PATH -- <build command>", err=True)
+            sys.exit(1)
+
+        click.echo(f"Watching command: {' '.join(command)}")
+        return_code, log_text = _run_command_capture(
+            tuple(command),
+            stream_output=not quiet_build_output and output == "text",
+        )
+
+        if return_code == 0:
+            if output == "json":
+                click.echo(json.dumps({
+                    "status": "success",
+                    "return_code": return_code,
+                    "command": list(command),
+                }, indent=2))
+            else:
+                click.echo("\nCommand completed successfully. No failure triage needed.")
+            return
+
+        parsed_log, results, diagnosis, compile_commands_path = _triage_log(
+            repo_path=repo_path,
+            log_text=log_text,
+            top_k=top_k,
+            build_dir=build_dir,
+            diagnose=True,
+        )
+
+        if output == "json":
+            payload = {
+                "status": "failure",
+                "return_code": return_code,
+                "command": list(command),
+                "error_type": parsed_log.error_type,
+                "query": parsed_log.query_text(),
+                "compile_commands_path": str(compile_commands_path) if compile_commands_path else "",
+                "diagnosis": diagnosis.to_dict() if diagnosis else None,
+                "results": [
+                    {
+                        "rank": r.rank,
+                        "file_path": r.file_path,
+                        "function_name": r.function_name,
+                        "start_line": r.start_line,
+                        "score": round(r.score, 4),
+                        "dense_score": round(r.dense_score, 4),
+                        "bm25_score": round(r.bm25_score, 4),
+                        "symbol_score": round(r.symbol_score, 4),
+                    }
+                    for r in results
+                ],
+            }
+            click.echo(json.dumps(payload, indent=2))
+            return
+
+        click.echo(f"\nBuild failed with exit code {return_code}")
+        click.echo(f"Detected error type: {parsed_log.error_type}")
+        if compile_commands_path:
+            click.echo(f"Compile DB: {compile_commands_path}")
+        click.echo("\nTop results:\n")
+        for r in results:
+            click.echo(f"  #{r.rank}  {r.file_path}:{r.start_line}")
+            click.echo(f"       Function: {r.function_name}")
+            click.echo(f"       Score: {r.score:.4f}")
+            click.echo()
+        for line in _format_diagnosis_text(diagnosis):
+            click.echo(line)
+
+    except Exception as exc:
+        click.echo(f"Error during watch: {exc}", err=True)
         sys.exit(1)
 
 
