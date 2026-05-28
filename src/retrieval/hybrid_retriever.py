@@ -26,6 +26,9 @@ SYMBOL_CANDIDATES = 20
 HINT_CANDIDATES = 20
 PREFIX_CANDIDATES = 20
 FILE_HINT_CANDIDATES = 20
+TEST_PATH_HINTS = (
+    "_test.", "_unittest.", "test_", "/test/", "/tests/", "_benchmark.", "_bench.",
+)
 
 
 @dataclass
@@ -151,6 +154,7 @@ class HybridRetriever:
                 parsed_log,
                 strict_pathless=strict_pathless,
             )
+            fused = self._apply_test_file_penalty(fused, parsed_log)
         if mode == "hybrid":
             fused = self._apply_sparse_anchor(
                 fused,
@@ -595,6 +599,20 @@ class HybridRetriever:
 
         return results
 
+    def _apply_test_file_penalty(
+        self,
+        results: List[RetrievalResult],
+        parsed_log,
+    ) -> List[RetrievalResult]:
+        """Downweight test/benchmark files unless the query clearly targets them."""
+        if not results or self._query_targets_tests(parsed_log):
+            return results
+
+        for result in results:
+            if self._is_test_like_path(result.file_path):
+                result.score = max(0.0, result.score - 0.08)
+        return results
+
     def _normalize_symbol(self, value: str) -> str:
         """Lowercase and strip non-symbol prefix noise from symbol strings."""
         value = value or ""
@@ -667,6 +685,20 @@ class HybridRetriever:
                 anchored = min(1.0, anchored + 0.12 * result.symbol_score * confidence)
             result.score = max(result.score, anchored)
         return results
+
+    def _query_targets_tests(self, parsed_log) -> bool:
+        """Return True when the log clearly points at a test/benchmark context."""
+        fields = []
+        for attr in ("source_paths", "file_hints", "build_targets", "stack_frames"):
+            fields.extend(str(v).lower() for v in getattr(parsed_log, attr, []) if v)
+        fields.append(str(getattr(parsed_log, "error_message", "")).lower())
+        fields.append(str(getattr(parsed_log, "raw_log", "")).lower())
+        return any(any(hint in field for hint in TEST_PATH_HINTS) for field in fields)
+
+    def _is_test_like_path(self, file_path: str) -> bool:
+        """Return True for test/benchmark-like result paths."""
+        value = str(file_path or "").replace("\\", "/").lower()
+        return any(hint in value for hint in TEST_PATH_HINTS)
 
     def _sparse_anchor_weight(self, parsed_log, strict_pathless: bool = False) -> float:
         """Return BM25 anchor strength for hybrid reranking."""

@@ -606,6 +606,48 @@ class TestPathContextBoosting:
         assert any(r.file_path == "target.cpp" for r in results)
 
 
+class TestTestFilePenalty:
+    """Test files should not crowd out production files unless query points to tests."""
+
+    def test_non_test_query_downweights_test_file(self):
+        dense = [
+            {"chunk_id": "prod.h::Condition", "file_path": "absl/synchronization/mutex.h",
+             "function_name": "Condition", "symbol_name": "Condition", "start_line": 10, "score": 0.90},
+            {"chunk_id": "test.cc::TEST", "file_path": "absl/synchronization/mutex_test.cc",
+             "function_name": "TEST", "symbol_name": "TEST", "start_line": 20, "score": 0.96},
+        ]
+        retriever = HybridRetriever(FakeVectorIndex(dense), FakeBM25Index([]))
+        parsed = parse_log("no matching function for call to `absl::Condition::Condition`")
+        results = retriever.retrieve(
+            FAKE_EMBEDDING,
+            parsed.query_text(),
+            top_k=2,
+            parsed_log=parsed,
+            deduplicate_files=False,
+            mode="dense",
+        )
+        assert results[0].file_path == "absl/synchronization/mutex.h"
+
+    def test_test_query_keeps_test_file_ranked(self):
+        dense = [
+            {"chunk_id": "prod.h::Condition", "file_path": "absl/synchronization/mutex.h",
+             "function_name": "Condition", "symbol_name": "Condition", "start_line": 10, "score": 0.90},
+            {"chunk_id": "test.cc::TEST", "file_path": "absl/synchronization/mutex_test.cc",
+             "function_name": "TEST", "symbol_name": "TEST", "start_line": 20, "score": 0.96},
+        ]
+        retriever = HybridRetriever(FakeVectorIndex(dense), FakeBM25Index([]))
+        parsed = parse_log("absl/synchronization/mutex_test.cc: error: no matching function for call")
+        results = retriever.retrieve(
+            FAKE_EMBEDDING,
+            parsed.query_text(),
+            top_k=2,
+            parsed_log=parsed,
+            deduplicate_files=False,
+            mode="dense",
+        )
+        assert results[0].file_path == "absl/synchronization/mutex_test.cc"
+
+
 class TestAdaptiveFusionWeights:
     """Hybrid fusion should adapt to linker/compiler-heavy lexical queries."""
 

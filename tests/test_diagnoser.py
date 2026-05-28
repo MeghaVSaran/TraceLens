@@ -241,3 +241,59 @@ def test_linker_diagnosis_does_not_claim_missing_edge_when_provider_is_transitiv
 
     assert "does not appear to link" not in diagnosis.likely_cause
     assert any("Definition provider target(s): provider" in item for item in diagnosis.evidence)
+
+
+def test_linker_diagnosis_prefers_header_declaration_over_test_invocation(tmp_path):
+    repo_root = tmp_path / "repo"
+    flags_dir = repo_root / "absl" / "flags"
+    flags_dir.mkdir(parents=True)
+    (flags_dir / "commandlineflag.h").write_text(
+        "class CommandLineFlag { public: bool IsRetired() const; };\n",
+        encoding="utf-8",
+    )
+    (flags_dir / "commandlineflag.cc").write_text(
+        "bool CommandLineFlag::IsRetired() const { return false; }\n",
+        encoding="utf-8",
+    )
+    (flags_dir / "commandlineflag_test.cc").write_text(
+        "void test() { EXPECT_TRUE(flag->IsRetired()); }\n",
+        encoding="utf-8",
+    )
+    (flags_dir / "internal").mkdir(parents=True)
+    (flags_dir / "internal" / "flag.cc").write_text("void use_flag() {}\n", encoding="utf-8")
+    (repo_root / "CMakeLists.txt").write_text(
+        "add_library(flags_internal absl/flags/internal/flag.cc)\n"
+        "add_library(flags_commandlineflag absl/flags/commandlineflag.cc)\n",
+        encoding="utf-8",
+    )
+    db_path = repo_root / "compile_commands.json"
+    db_path.write_text(
+        json.dumps([
+            {
+                "directory": str(repo_root),
+                "file": "absl/flags/internal/flag.cc",
+                "command": "clang++ -std=c++20 -c absl/flags/internal/flag.cc",
+            }
+        ]),
+        encoding="utf-8",
+    )
+    compile_commands = CompileCommandsIndex.from_file(db_path, repo_root=repo_root)
+    cmake_index = CMakeProjectIndex.from_repo(repo_root)
+    diagnoser = FailureDiagnoser(
+        repo_root=repo_root,
+        compile_commands=compile_commands,
+        cmake_index=cmake_index,
+    )
+    parsed = parse_log(
+        "/usr/bin/ld: CMakeFiles/flags_internal.dir/internal/flag.cc.o:"
+        " undefined reference to `absl::CommandLineFlag::IsRetired() const'\n",
+        repo_root=repo_root,
+    )
+    results = [
+        _result("absl/flags/commandlineflag.cc", "CommandLineFlag::IsRetired", 1, 1.0, "IsRetired"),
+        _result("absl/flags/internal/flag.cc", "__file__", 1, 0.95),
+    ]
+
+    diagnosis = diagnoser.diagnose(parsed, results)
+
+    assert any("Repo declaration site: absl/flags/commandlineflag.h:1" in item for item in diagnosis.evidence)

@@ -9,6 +9,7 @@ import re
 
 
 CPP_GLOB_SUFFIXES = (".h", ".hh", ".hpp", ".hxx", ".c", ".cc", ".cpp", ".cxx")
+CALL_OPERATOR_PREFIXES = ("->", ".")
 
 
 @dataclass(frozen=True)
@@ -99,6 +100,8 @@ def _scan_file_for_symbol(repo_root: Path, file_path: Path, symbol: str) -> Opti
             continue
         if "(" not in stripped or ")" not in stripped:
             continue
+        if not _looks_like_symbol_declaration_or_definition(stripped, tail):
+            continue
 
         after_paren = stripped.split(")", 1)[-1]
         kind = None
@@ -117,3 +120,28 @@ def _scan_file_for_symbol(repo_root: Path, file_path: Path, symbol: str) -> Opti
             kind=kind,
         )
     return None
+
+
+def _looks_like_symbol_declaration_or_definition(line: str, tail: str) -> bool:
+    """Reject call sites and assertions that merely invoke the symbol."""
+    match = re.search(rf"\b{re.escape(tail)}\b\s*\(", line)
+    if match is None:
+        return False
+
+    prefix = line[:match.start()].rstrip()
+    if prefix.endswith(CALL_OPERATOR_PREFIXES):
+        return False
+    if prefix.endswith(("::", "~")):
+        return True
+
+    # Declarations/definitions typically have a return type, qualifier, or
+    # class scope immediately before the symbol rather than a macro argument.
+    if not prefix:
+        return False
+    tokens = re.split(r"\s+", prefix)
+    last_token = tokens[-1] if tokens else ""
+    if last_token in {"return", "if", "while", "for", "switch", "case"}:
+        return False
+    if "(" in prefix and not prefix.endswith(")"):
+        return False
+    return True
