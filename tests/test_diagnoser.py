@@ -192,3 +192,52 @@ def test_linker_target_hint_is_used_when_compile_entry_mapping_is_missing(tmp_pa
 
     assert any("Failing source appears in target: absl_flags_internal" in item for item in diagnosis.evidence)
     assert any("Definition provider target(s): absl_flags" in item for item in diagnosis.evidence)
+
+
+def test_linker_diagnosis_does_not_claim_missing_edge_when_provider_is_transitive(tmp_path):
+    repo_root = tmp_path / "repo"
+    src_dir = repo_root / "src"
+    src_dir.mkdir(parents=True)
+    (src_dir / "provider.cpp").write_text("int provide() { return 1; }\n", encoding="utf-8")
+    (src_dir / "mid.cpp").write_text("int mid() { return provide(); }\n", encoding="utf-8")
+    (src_dir / "consumer.cpp").write_text("int main() { return mid(); }\n", encoding="utf-8")
+    (repo_root / "CMakeLists.txt").write_text(
+        "add_library(provider src/provider.cpp)\n"
+        "add_library(mid src/mid.cpp)\n"
+        "target_link_libraries(mid PRIVATE provider)\n"
+        "add_executable(app src/consumer.cpp)\n"
+        "target_link_libraries(app PRIVATE mid)\n",
+        encoding="utf-8",
+    )
+    db_path = repo_root / "compile_commands.json"
+    db_path.write_text(
+        json.dumps([
+            {
+                "directory": str(repo_root),
+                "file": "src/consumer.cpp",
+                "command": "clang++ -std=c++20 -c src/consumer.cpp",
+            }
+        ]),
+        encoding="utf-8",
+    )
+    compile_commands = CompileCommandsIndex.from_file(db_path, repo_root=repo_root)
+    cmake_index = CMakeProjectIndex.from_repo(repo_root)
+    diagnoser = FailureDiagnoser(
+        repo_root=repo_root,
+        compile_commands=compile_commands,
+        cmake_index=cmake_index,
+    )
+    parsed = parse_log(
+        "/usr/bin/ld: undefined reference to `provide`\n"
+        "src/consumer.cpp:(.text+0x1): undefined reference\n"
+    )
+    parsed.source_paths = ["src/consumer.cpp"]
+    results = [
+        _result("src/provider.cpp", "provide", 1, 0.97, "provide"),
+        _result("src/consumer.cpp", "main", 1, 0.80, "main"),
+    ]
+
+    diagnosis = diagnoser.diagnose(parsed, results)
+
+    assert "does not appear to link" not in diagnosis.likely_cause
+    assert any("Definition provider target(s): provider" in item for item in diagnosis.evidence)

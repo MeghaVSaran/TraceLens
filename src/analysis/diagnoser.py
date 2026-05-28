@@ -449,6 +449,8 @@ class FailureDiagnoser:
         """Return True if a target already links any provider target name."""
         if target is None or not providers:
             return False
+        if self.cmake_index:
+            return self.cmake_index.target_reaches_any(target, providers)
         linked = set(target.links)
         return any(provider.name in linked for provider in providers)
 

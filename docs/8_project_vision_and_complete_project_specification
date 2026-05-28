@@ -1,366 +1,544 @@
-# DebugAid — Final Project Vision & Complete Specification
+# DebugAid - Final Product Vision and Build Plan
 
-## What It Is
+## Purpose of This Document
 
-DebugAid is an **intelligent C++ debugging and code understanding assistant** that combines semantic retrieval, static analysis, and LLM synthesis to help engineers navigate large C++ codebases. It works both reactively (given a log, find the cause) and proactively (analyze code structure, watch for failures, understand unfamiliar code).
+This document is the single source of truth for what DebugAid should become.
+It is intentionally forward-looking, ambitious, and product-oriented, while still grounded in what can realistically be built by one engineer with limited budget and time.
 
-Target codebases: LLVM, Chromium, OpenCV, abseil, internal EDA tools (Cadence, Keysight, Synopsys). Target users: engineers who spend significant time debugging build failures and runtime crashes in million-line C++ projects.
+Whenever we make roadmap, architecture, feature, or prioritization decisions, this is the reference point.
 
 ---
 
-## Five Core Modes
+## Product Identity
 
-### Mode 1 — `debugaid query` *(exists today)*
-Given a build or runtime log, return the most relevant source files and functions with root cause analysis.
+DebugAid is not just a log-to-file retriever.
+
+DebugAid should become a **local, repo-aware debugging and failure-triage assistant for large C and C++ codebases**.
+
+Its job is to take a failure that normally costs an engineer 20-90 minutes to understand and reduce that to a few minutes by combining:
+
+- repository indexing
+- build awareness
+- symbol and source understanding
+- deterministic failure-specific analysis
+- optional LLM synthesis on top of real evidence
+
+The project should feel useful in environments like Cadence, Keysight, Synopsys, Google, Amazon, NVIDIA, and other companies with:
+
+- large C/C++ codebases
+- complex build systems
+- many internal libraries and targets
+- hard-to-debug linker/runtime failures
+- long CI logs
+- engineers working outside their familiar subsystem
+
+---
+
+## Core Product Thesis
+
+Generic coding copilots are strong at broad code assistance, but they are not specialized local failure analyzers for large build-aware C++ repositories.
+
+DebugAid should win by being:
+
+- **local-first**: works on private repos and logs without shipping code to a hosted system
+- **build-aware**: understands compile commands, targets, includes, libraries, and link edges
+- **symbol-aware**: resolves declarations, definitions, call relationships, and ownership clues
+- **failure-aware**: different logic for linker errors, compiler failures, crashes, sanitizer reports, and build-system issues
+- **evidence-first**: deterministic retrieval and structured evidence come before any LLM explanation
+- **useful under pressure**: optimized for "build is broken right now" and "CI failed, what matters?"
+
+This is the answer to "why not just use Claude Code / Copilot / Cursor?"
+
+Because DebugAid should not be a generic assistant that only reasons from pasted text. It should be a repo-indexed, build-aware, evidence-backed debugging system.
+
+---
+
+## Target Users
+
+### Primary users
+
+- C++ developers working in large monorepos or multi-library projects
+- engineers debugging compiler, linker, runtime, and CI failures
+- new team members onboarding into unfamiliar subsystems
+- developers triaging failures in code they did not write
+
+### Secondary users
+
+- CI/build owners
+- developer productivity/tooling teams
+- test infrastructure engineers
+- technical leads doing failure triage across multiple modules
+
+---
+
+## The Real Problems DebugAid Should Solve
+
+DebugAid should focus on expensive debugging tasks, not trivial ones.
+
+### High-value problems
+
+- "Why did this target fail to compile even though the header exists?"
+- "Where is this unresolved symbol declared, defined, and why is it not linked?"
+- "This crash happened here, but which earlier frame likely introduced the bad state?"
+- "This sanitizer trace points to frame 0, but where is the actual ownership bug?"
+- "This CI log is thousands of lines long; what are the 5 lines that matter?"
+- "I am new to this subsystem; what code and build targets actually own this failure?"
+- "Which file or target probably caused this regression?"
+- "Why does this build work in one target/configuration but fail in another?"
+
+### Problems that are not enough by themselves
+
+- finding a file when the compiler already prints the exact file path
+- generic code chat with little build or repo context
+- broad semantic search without debugging-specific reasoning
+
+Those can exist as supporting features, but they should not define the product.
+
+---
+
+## Product Pillars
+
+### 1. Failure Triage
+
+Given a build/test/crash log, DebugAid should identify:
+
+- failure type
+- likely root cause
+- relevant files/functions
+- build target or library context
+- strongest supporting evidence
+- next fix to try
+
+### 2. Build Intelligence
+
+DebugAid should understand more than source code:
+
+- `compile_commands.json`
+- target ownership
+- include directories
+- source-to-target mapping
+- direct and transitive link dependencies
+- generated artifacts when possible
+
+### 3. Runtime and Memory Debugging
+
+DebugAid should help analyze:
+
+- segfaults
+- ASan/UBSan reports
+- suspicious ownership and lifetime patterns
+- likely bad-state introduction points higher in the stack
+
+### 4. Performance and Resource Triage
+
+Later, DebugAid should ingest and explain:
+
+- profiler outputs
+- benchmark regressions
+- allocation hotspots
+- lock contention and synchronization hotspots
+- obvious copy/move/string/container inefficiencies
+
+### 5. Interactive Repo Understanding
+
+Eventually, DebugAid should become a guided assistant for unfamiliar codebases:
+
+- explain a function/module/target
+- show declaration/definition/caller relationships
+- point to likely owning subsystem
+- summarize why a given component exists and how it connects to the failure
+
+---
+
+## Product Modes
+
+The final product should support a small number of strong workflows rather than many shallow ones.
+
+### Mode 1 - `debugaid query`
+
+Given a saved log, return structured triage.
+
+Example:
+
 ```bash
-debugaid query --log build.log --repo ./llvm-project
+debugaid query --log build.log --repo ./repo --diagnose
 ```
 
-### Mode 2 — `debugaid watch` *(Phase 2)*
-Wrap a build command, intercept failures in real time, surface results automatically without copy-pasting logs.
+### Mode 2 - `debugaid watch`
+
+Wrap a live build or test command and triage failures automatically.
+
+Example:
+
 ```bash
-debugaid watch --repo ./llvm-project -- make -j8
+debugaid watch --repo ./repo --build-dir ./build -- ninja -j8
 ```
-Runs `make -j8`, captures stderr, detects failure, immediately runs the full retrieval + AST + LLM pipeline, prints results inline. Feels like a real dev tool integrated into the build loop.
 
-### Mode 3 — `debugaid explain` *(Phase 3)*
-Given any function, explain what it does, what calls it, what it calls, and flag structural issues — without needing an error log.
+This should become the signature demo flow.
+
+### Mode 3 - `debugaid ci-triage`
+
+Given a CI artifact or long log, condense it into:
+
+- failing step
+- dominant failure type
+- likely root-cause cluster
+- key evidence lines
+- relevant source/build targets
+
+### Mode 4 - `debugaid explain`
+
+Given a file/function/target, explain its role in the repo, related symbols, and likely coupling points.
+
+### Mode 5 - `debugaid perf`
+
+Given profiler or benchmark output, surface hotspots, suspect allocations, and likely code-level optimization opportunities.
+
+This is later-phase work, not the immediate priority.
+
+---
+
+## What Makes the Product Special
+
+DebugAid should feel different from a generic assistant in these ways:
+
+### Repo-aware
+
+It should know the actual indexed repo, not just the text the user pasted.
+
+### Build-aware
+
+It should understand that many C++ failures are caused by target wiring, include paths, compile flags, generated code, and library edges, not only by code inside one file.
+
+### Failure-specific
+
+A linker analyzer should behave differently from a segfault analyzer.
+
+### Evidence-backed
+
+The LLM should summarize evidence, not invent retrieval or diagnosis from scratch.
+
+### Practical for private code
+
+The default design should remain local-first and cheap to run.
+
+---
+
+## Final Product Architecture
+
+### 1. Ingestion and Indexing Layer
+
+Inputs:
+
+- repository source files
+- `compile_commands.json`
+- CMake/build metadata
+- optional test files
+- optional generated files
+
+Artifacts:
+
+- code chunks
+- symbol table
+- declaration/definition index
+- target graph
+- include graph
+- vector index
+- BM25 index
+- file metadata
+
+### 2. Retrieval Layer
+
+Purpose:
+
+- retrieve relevant files/functions when given logs, stack traces, symbols, or code questions
+
+Core components:
+
+- BM25 sparse retrieval
+- dense retrieval
+- hybrid fusion
+- symbol-aware boosts
+- path-aware injection when allowed
+- strict pathless mode for honest evaluation
+- later: learned reranker trained on log-code relevance pairs
+
+### 3. Build and Symbol Intelligence Layer
+
+Purpose:
+
+- connect source evidence to actual build and symbol relationships
+
+Core capabilities:
+
+- compile command lookup
+- declaration/definition resolution
+- target ownership inference
+- transitive link reasoning
+- header/source pairing
+- optional future AST-backed call graph
+
+### 4. Analyzer Layer
+
+Failure-specific analyzers should be separate modules, not one generic blob.
+
+Priority analyzers:
+
+- include failure analyzer
+- compiler symbol/signature analyzer
+- linker unresolved symbol analyzer
+- segfault analyzer
+- ASan/UBSan analyzer
+- build-system analyzer
+- runtime exception analyzer
+- later: performance analyzer
+
+### 5. Explanation Layer
+
+Optional LLM synthesis turns structured evidence into:
+
+- likely cause
+- confidence
+- why this evidence matters
+- suggested next action
+- short summary suitable for humans and CI comments
+
+### 6. UX Layer
+
+Surfaces:
+
+- CLI
+- watch mode
+- CI summary output
+- later: lightweight web UI or VS Code extension
+
+---
+
+## Technology Strategy
+
+### Keep using
+
+- Python for orchestration and product velocity
+- Tree-sitter for broad source parsing
+- BM25 for strong lexical/symbol retrieval
+- vector retrieval for semantic support
+- local on-disk indices for cheap operation
+
+### Add next
+
+- stronger CMake/build graph understanding
+- `compile_commands.json` as first-class input
+- richer symbol ownership and declaration/definition mapping
+- persistent session or daemon mode for faster repeated queries
+
+### Add later
+
+- libclang or clangd-backed semantic analysis for higher-fidelity C++ understanding
+- learned reranker trained on log-code candidate pairs
+- profiler/sanitizer-specific ingestion
+- editor or CI integrations
+
+### Cost discipline
+
+The expensive part should not be an always-on hosted LLM.
+
+The system should do most of its real work through deterministic local analysis, and use an LLM only when it adds explanation quality.
+
+---
+
+## Product Roadmap
+
+## Phase 1 - Retrieval Foundation
+
+Goal:
+
+- turn logs into relevant candidate files/functions reliably
+
+Delivered:
+
+- indexing
+- log parsing
+- hybrid retrieval
+- strict pathless evaluation
+- ablation harness
+
+Completion standard:
+
+- good retrieval quality on synthetic and pathless benchmarks
+- enough parser coverage to support real Phase 2 diagnosis
+
+## Phase 2 - Failure Triage Product
+
+Goal:
+
+- make the tool genuinely useful for live build/debug workflows
+
+Core deliverables:
+
+- `watch` mode
+- structured diagnosis output
+- compile command ingestion
+- linker declaration/definition reasoning
+- build-target inference
+- CMake target/link analysis
+- real-dataset evaluation on GitHub-mined samples
+
+Success criteria:
+
+- useful diagnosis on real compiler/linker/build failures
+- stable CLI workflow for live triage
+- no major regression in retrieval quality
+
+## Phase 3 - Runtime and Memory Debugging Assistant
+
+Goal:
+
+- help with crashes and ownership/lifetime debugging, not just build failures
+
+Core deliverables:
+
+- deeper stack-trace reasoning
+- ASan/UBSan-specific analyzers
+- caller-context retrieval
+- ownership and bounds heuristics
+- better runtime exception triage
+
+Success criteria:
+
+- meaningful help on segfaults and sanitizer logs
+- identifies likely bad-state introduction sites, not just crash sites
+
+## Phase 4 - Performance and Optimization Assistant
+
+Goal:
+
+- become useful for performance triage and code-health diagnosis
+
+Core deliverables:
+
+- profiler ingestion
+- hotspot explanation
+- allocation and copy/move heuristics
+- lock/synchronization hotspot analysis
+- benchmark regression summaries
+
+Success criteria:
+
+- practical value on profiler/benchmark outputs
+- evidence-backed optimization suggestions
+
+## Phase 5 - Interactive Repo Intelligence
+
+Goal:
+
+- become a broader debugging and code-understanding assistant for large repos
+
+Core deliverables:
+
+- explain mode
+- subsystem ownership summaries
+- richer call/symbol graph exploration
+- CI comment generation
+- optional editor integration
+
+---
+
+## Evaluation Strategy
+
+We should measure what matters, not only what is easy.
+
+### Retrieval metrics
+
+- R@1, R@3, R@5
+- MRR
+- strict pathless slices
+- real GitHub-mined slices
+
+### Diagnosis metrics
+
+- correct failure type
+- correct likely cause family
+- correct primary file or target
+- correct declaration/definition pairing
+- useful next-step suggestion
+
+### Product metrics
+
+- time to first useful answer
+- repeated-query latency
+- index build time
+- memory footprint
+- usefulness on unfamiliar repos
+
+### Dataset priorities
+
+- synthetic evaluation remains useful for controlled coverage
+- real mined issues are more important for honesty
+- pathless cases are the most important benchmark for real product value
+
+---
+
+## What "Amazing" Actually Means for This Project
+
+An amazing version of DebugAid is not one that does everything.
+
+It is one that developers trust during stressful debugging because it is:
+
+- fast enough to use in the loop
+- accurate enough to not waste their time
+- honest about confidence
+- grounded in repo and build evidence
+- able to solve failures that grep and a generic LLM do not solve cleanly
+
+If a developer can run:
+
 ```bash
-debugaid explain --repo ./llvm-project \
-  --file lib/CodeGen/SelectionDAG.cpp \
-  --function SelectionDAG::getNode
-```
-Output: LLM-generated function summary, call graph, AST warnings, last git commit that touched this function.
-
-### Mode 4 — `debugaid diff` *(Phase 3)*
-Given a commit SHA, identify which indexed functions were modified and flag structural issues introduced by the change.
-```bash
-debugaid diff --repo ./llvm-project --commit abc123
-```
-Output: list of modified functions, AST analysis of each, flagged regressions (e.g. function that previously had null checks no longer does).
-
-### Mode 5 — `debugaid similar` *(Phase 3)*
-Find functions semantically similar to a given function. Useful for understanding patterns and finding related code.
-```bash
-debugaid similar --repo ./llvm-project --function Parser::resolveSymbol
-```
-Output: top-10 semantically similar functions across the codebase with similarity scores. Powered by GraphCodeBERT embeddings already in the index.
-
----
-
-## Example Output (query mode)
-
-```
-$ debugaid query --log build.log --repo ./llvm-project
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  DebugAid — C++ Debugging Assistant
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Error Type:   linker_error
-Query:        undefined reference to llvm::SelectionDAG::getNode
-
-Top Matches:
-  ① llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp
-     Function: SelectionDAG::getNode()  [line 4521]
-     Score: 0.94
-
-  ② llvm/include/llvm/CodeGen/SelectionDAG.h
-     Function: SelectionDAG::getNode()  [line 892]
-     Score: 0.87
-
-  ③ llvm/lib/CodeGen/SelectionDAGISel.cpp
-     Function: SelectionDAGISel::runOnMachineFunction()  [line 312]
-     Score: 0.71
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  AST Analysis  (via libclang)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  ⚠  SelectionDAG::getNode declared in SelectionDAG.h (line 892)
-     but no matching definition found in linked translation units.
-     Likely cause: SelectionDAG.cpp not included in CMake target.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Diagnosis  (LLM synthesis)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  Most likely cause:
-  SelectionDAG::getNode is declared in SelectionDAG.h but its
-  definition in SelectionDAG.cpp is not being linked. This typically
-  happens when SelectionDAGCodeGen is not listed in target_link_libraries
-  in your CMakeLists.txt.
-
-  Suggested fix:
-  Add SelectionDAGCodeGen to target_link_libraries() in the
-  CMakeLists.txt for the target that uses SelectionDAG.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+debugaid watch --repo ./repo --build-dir ./build -- ninja -j8
 ```
 
----
+and get back:
 
-## Error Types Supported
+- the likely broken target
+- the declaration/definition pair
+- the missing include or link edge
+- the likely root cause
+- the next thing to edit
 
-- Linker errors (undefined reference, multiple definition)
-- Compiler errors (undeclared identifier, no matching function, not a member of)
-- Include errors (missing headers, broken include paths)
-- Template errors (implicit instantiation, undefined specialization)
-- Segfault / stack traces (GDB and LLVM format)
-- AddressSanitizer errors (heap overflow, use-after-free, stack overflow)
-- Build system errors (CMake find_package failures, Make rule errors)
-- Runtime exceptions (std::bad_alloc, std::out_of_range, terminate)
+then this project is genuinely strong.
 
 ---
 
-## Full Pipeline Architecture
+## Near-Term Priorities
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    INPUT LAYER                          │
-│                                                         │
-│  query mode:   build/runtime log file                   │
-│  watch mode:   real-time stderr from build command      │
-│  explain mode: file path + function name                │
-│  diff mode:    git commit SHA                           │
-│  similar mode: function name                            │
-└─────────────────────────┬───────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────┐
-│                   LOG PARSER                            │
-│              src/ingestion/log_parser.py                │
-│                                                         │
-│  8 error categories:                                    │
-│  linker_error, compiler_error, include_error,           │
-│  template_error, segfault, asan_error,                  │
-│  build_system_error, runtime_exception                  │
-│                                                         │
-│  Extracts: error_type, identifiers, file_hints,         │
-│  source_paths (absolute → relative normalization),      │
-│  stack_frames, __BOGUS_ prefix stripping                │
-└─────────────────────────┬───────────────────────────────┘
-                          │
-          ┌───────────────┴──────────────┐
-          │                              │
-          ▼                              ▼
-┌──────────────────┐         ┌────────────────────────┐
-│   Log Embedder   │         │  Source Path Injection  │
-│   all-mpnet-     │         │  ChromaDB metadata      │
-│   base-v2        │         │  where=file_path filter │
-│   768-dim        │         │  score = 0.95 (direct)  │
-└────────┬─────────┘         └───────────┬────────────┘
-         │                               │
-         └──────────────┬────────────────┘
-                        │
-                        ▼
-┌─────────────────────────────────────────────────────────┐
-│                HYBRID RETRIEVER                         │
-│            src/retrieval/hybrid_retriever.py            │
-│                                                         │
-│  Dense:   ChromaDB cosine similarity (GraphCodeBERT)    │
-│  Sparse:  BM25Okapi (rank_bm25) with CamelCase         │
-│           + snake_case tokenization                     │
-│  Fusion:  0.5 × dense + 0.5 × BM25                     │
-│  Inject:  source path chunks at 0.95 directly           │
-│  Dedup:   best function per unique file_path            │
-└─────────────────────────┬───────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────┐
-│              CLANG AST ANALYSIS LAYER                   │
-│             src/analysis/ast_checker.py                 │
-│             libclang Python bindings                    │
-│                                                         │
-│  linker_error  → declared-not-defined function check    │
-│  compiler_error → symbol scope and type analysis        │
-│  include_error  → missing header dependency tracing     │
-│  segfault       → null pointer dereference detection    │
-│  asan_error     → buffer bounds and lifetime analysis   │
-│                                                         │
-│  Output: line-level structural findings per file        │
-└─────────────────────────┬───────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────┐
-│               LLM SYNTHESIS LAYER                       │
-│             src/synthesis/llm_synthesizer.py            │
-│             Claude API (primary) / OpenAI (fallback)    │
-│                                                         │
-│  Input:  error log + top-3 code chunks                  │
-│          + AST findings + error type                    │
-│  Output: structured JSON diagnosis:                     │
-│          - most_likely_cause (string)                   │
-│          - suggested_fix (string)                       │
-│          - confidence (high/medium/low)                 │
-│          - relevant_docs (links if available)           │
-│                                                         │
-│  Principle: LLM synthesizes evidence, does NOT          │
-│  do retrieval. Retrieval is deterministic + measurable. │
-└─────────────────────────┬───────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────┐
-│                  RICH TUI OUTPUT                        │
-│              src/ui/terminal.py (rich library)          │
-│                                                         │
-│  Color-coded error type badges                          │
-│  Ranked results with score bars                         │
-│  Expandable code previews (syntax highlighted)          │
-│  AST findings inline with results                       │
-│  LLM diagnosis panel                                    │
-│  Docker-portable (works in any terminal)                │
-└─────────────────────────────────────────────────────────┘
-```
+The next engineering priorities should stay tightly aligned with the product thesis:
+
+1. strengthen build-target and link-edge reasoning on real repos
+2. improve diagnosis usefulness on GitHub-mined linker/compiler failures
+3. reduce repeated-query latency with a persistent runtime/session path
+4. make realistic evaluation harder to misconfigure
+5. expand into stronger runtime/memory analyzers after Phase 2 is solid
 
 ---
 
-## Code Indexing Pipeline
+## Resume and Demo Positioning
 
-```
-C++ Repository
-      │
-      ▼
-Tree-sitter parser (function-level chunks)
-+ file-level fallback chunks for zero-function files
-      │
-      ▼
-GraphCodeBERT embeddings (768-dim, batched, GPU)
-      │
-      ├──→ ChromaDB (persistent vector store)
-      │    metadata: file_path, function_name, start_line
-      │
-      └──→ BM25Okapi index (rank_bm25)
-           tokenizer: splits CamelCase, snake_case, operators
-```
+The strongest way to present DebugAid is:
 
----
+**"A local failure-triage and debugging assistant for large C/C++ codebases that combines retrieval, build analysis, symbol resolution, and structured diagnosis."**
 
-## Complete Tech Stack
+That is stronger than:
 
-**Languages:** Python 3.11+, C++ (target language being analyzed, not written)
+- "semantic code search"
+- "log analysis tool"
+- "AI code assistant"
 
-**Code Parsing & Static Analysis**
-- Tree-sitter + tree-sitter-cpp — function-level AST parsing, chunk extraction, template/inline method handling
-- libclang (Python bindings) — semantic C++ analysis, type resolution, call graph, symbol scope analysis
+The best demo is not an ablation table.
 
-**Machine Learning**
-- GraphCodeBERT (`microsoft/graphcodebert-base`) — code embeddings, 768-dim
-- all-mpnet-base-v2 (`sentence-transformers/all-mpnet-base-v2`) — log/query embeddings, 768-dim
-- PyTorch — model inference, CUDA support
-- HuggingFace Transformers — model loading
-- Sentence Transformers — embedding pipeline
+The best demo is:
 
-**Retrieval & Storage**
-- ChromaDB — persistent vector store, cosine similarity, metadata filtering
-- rank-bm25 (BM25Okapi) — sparse retrieval
-- Hybrid fusion with source path direct injection
+1. run a real build/test command
+2. let it fail
+3. run `debugaid watch`
+4. show the likely cause, files, target evidence, and next fix
 
-**LLM Integration**
-- Anthropic Claude API — primary synthesis provider
-- OpenAI API — fallback, same interface
-- Structured JSON output via prompt engineering
-
-**Interface**
-- Click — CLI framework, 5 commands: index, query, watch, eval, info
-- Rich — terminal UI, syntax highlighting, panels, progress bars
-- tqdm — indexing progress
-
-**DevOps**
-- Docker + docker-compose — portable demo
-- pytest — test suite (153+ tests)
-- Git — version control, incremental dataset building
-
-**Dataset & Evaluation**
-- PyGithub — GitHub API mining
-- Custom eval harness: Recall@1/3/5, MRR, per-error-type breakdown
-- Ground truth: 281 labeled (log, relevant_files) pairs — 81 GitHub-mined + 200 synthetic
-
----
-
-## Datasets
-
-### Currently Used
-- **GitHub Issue Mining (81 pairs):** Mined from llvm/llvm-project, opencv/opencv, abseil/abseil-cpp. Each pair: issue body log snippet → fixing commit → modified files.
-- **Synthetic Error Generation (200 pairs):** Programmatic injection into abseil-cpp source — commented-out function bodies (linker errors), removed includes (include errors), renamed identifiers (compiler errors). Compiled with GCC, stderr captured.
-
-### Planned
-- **More GitHub Mining:** google/protobuf, grpc/grpc, gcc-mirror/gcc — target 500+ additional pairs
-- **More Synthetic Generation:** protobuf, OpenCV, LLVM/clang/lib — target 500+ additional synthetic pairs
-- **SWE-bench C++ subset:** Real GitHub issues + fixes, peer-reviewed ground truth, used for final evaluation reporting
-- **LogHub:** HKUST's 30+ real system log datasets, for validating log parser error type classification across diverse formats
-- **Self-generated from watch mode:** Real logs from real development sessions — highest quality pairs
-
-### Dataset Targets
-- Phase 2 evaluation: 800–1000 pairs (GitHub + synthetic, multiple repos)
-- Final evaluation: 1500+ pairs including SWE-bench C++ subset
-- Balanced across all 8 error categories
-
----
-
-## Evaluation Results (Current)
-
-Evaluated on abseil-filtered dev set (44 samples):
-
-| Metric | Score |
-|---|---|
-| Recall@1 | 0.9318 |
-| Recall@3 | 0.9545 |
-| Recall@5 | 0.9545 |
-| MRR | 0.9432 |
-
-Per error type: compiler_error Recall@5 = 1.00, include_error Recall@5 = 1.00, linker_error Recall@5 = 0.80.
-
-*Note: evaluated on synthetic dev set where logs contain file paths. Real-world performance will differ.*
-
-### Evaluation Targets by Phase
-
-| Phase | Recall@5 | MRR | Dataset |
-|---|---|---|---|
-| Current (MVP) | 0.95 | 0.94 | abseil synthetic, 44 samples |
-| Phase 2 | >0.70 | >0.60 | multi-repo, 400+ real samples |
-| Final | >0.65 | >0.55 | SWE-bench C++ + GitHub, 800+ samples |
-
-Numbers go down as the dataset becomes more realistic (real logs without file paths). That's expected and honest.
-
----
-
-## Development Roadmap
-
-**Now (Active)**
-- Expand dataset — more repos, more GitHub mining
-- Index LLVM, prepare demo queries
-
-**Phase 2 (2–3 weeks)**
-- Clang AST checker (libclang, 4 error type checkers)
-- LLM synthesis layer (Claude API, structured JSON output)
-- `debugaid watch` mode (subprocess wrapper, real-time stderr)
-- Rich TUI output
-
-**Phase 3 (Following 2 weeks)**
-- `debugaid explain`, `debugaid diff`, `debugaid similar`
-- Docker packaging
-- Ablation study (GraphCodeBERT vs single model baseline)
-- Fusion weight grid search on dev set
-- Final eval on SWE-bench C++ subset
-
-**Polish**
-- README with benchmark table
-- Demo video on LLVM
-- Resume bullet update with final numbers
-
----
-
-## Key Design Decisions
-
-**Why hybrid retrieval?** Dense embeddings capture semantics ("linker error" → linker code) but miss exact identifiers. BM25 matches exact symbol names but misses semantic context. Combining both handles each failure mode.
-
-**Why source path injection?** Many compiler logs contain the exact file path. Rather than hoping retrieval surfaces it, we directly fetch chunks from that file via ChromaDB metadata filtering at score 0.95. This was the single biggest recall improvement (Recall@5: 0.32 → 0.95).
-
-**Why file-level fallback chunks?** Tree-sitter fails to extract functions from ~16% of C++ files (macro-heavy files, very short implementations). Without fallback chunks these files are unretrievable. A `__file__` chunk for zero-function files ensures every file is in the index.
-
-**Why keep LLM separate from retrieval?** Retrieval is deterministic and measurable. LLM is probabilistic and hard to evaluate. Keeping them separate means retrieval quality can be improved and measured independently with Recall@K and MRR.
-
-**Why GraphCodeBERT for code, mpnet for logs?** GraphCodeBERT is trained on code and understands structure. mpnet is the best general semantic model for natural language. They operate in different embedding spaces but cosine similarity still captures meaningful cross-modal relationships — validated by evaluation results.
-
----
+That is the bar the project should aim for.
