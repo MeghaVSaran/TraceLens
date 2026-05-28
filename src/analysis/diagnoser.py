@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+import re
 from typing import Iterable, Optional
 
 from src.analysis.cmake_index import CMakeProjectIndex
@@ -247,23 +248,70 @@ class FailureDiagnoser:
         symbol = self._first_identifier(parsed_log)
         best = self._find_matching_result(results, symbol)
         summary = f"Compiler failure around {symbol or 'a missing/invalid symbol'}."
+        failure_kind = self._compiler_failure_kind(parsed_log, symbol)
+        location = f"{best.file_path}:{best.start_line}" if best else "the top-ranked code context"
 
-        if best:
+        if failure_kind == "platform_macro":
+            likely_cause = (
+                f"{symbol or 'The identifier'} looks like a platform or feature-test macro, not a repo-owned C++ symbol. "
+                f"The failure is likely a portability/configuration issue near {location}, not a normal C++ symbol-lookup problem."
+            )
+            suggested_fix = (
+                "Check the platform header, feature-test macros, and OS guards used by the failing target; add a portable fallback if the macro is unavailable."
+            )
+            confidence = "medium" if symbol else "low"
+        elif failure_kind == "constructor_signature":
+            likely_cause = (
+                f"The constructor call for {symbol or 'this type'} does not match the available overloads. "
+                f"Retrieval points to {location}, so the bug is likely an argument type, callable signature, or lifetime mismatch at the call site."
+            )
+            suggested_fix = (
+                "Compare the failing constructor arguments against the retrieved declaration and adjust the callable, wrapper type, or explicit construction."
+            )
+            confidence = "high" if best and symbol else "medium"
+        elif failure_kind == "call_signature":
+            likely_cause = (
+                f"The compiler found a call to {symbol or 'a function'}, but no visible overload accepts the argument types in the error. "
+                f"Retrieval points to {location}, so this is more likely an overload/type mismatch than a missing file."
+            )
+            suggested_fix = (
+                "Compare the failing call's argument types with the retrieved overloads; add an explicit cast/template argument or choose the intended overload."
+            )
+            confidence = "high" if best and symbol else "medium"
+        elif failure_kind == "member_lookup":
+            likely_cause = (
+                f"The member lookup for {symbol or 'the requested member'} failed. "
+                f"Retrieval points to {location}, so the receiver type may differ from the type that actually owns that member."
+            )
+            suggested_fix = "Check the receiver type, namespace/using context, and whether a feature flag or version mismatch removed the member."
+            confidence = "high" if best and symbol else "medium"
+        elif failure_kind == "type_visibility":
+            likely_cause = (
+                f"{symbol or 'The type'} is referenced before the compiler has a complete visible declaration. "
+                f"Retrieval points to {location}, so this is likely include-order, forward-declaration, or conditional-compilation related."
+            )
+            suggested_fix = "Include the owning header at the use site or move the operation to a location where the full type definition is visible."
+            confidence = "high" if best and symbol else "medium"
+        elif best:
             likely_cause = (
                 f"{symbol or 'The symbol'} is most likely owned or declared near {best.file_path}:{best.start_line}. "
-                "The compile error is likely coming from a missing include, wrong namespace, or signature mismatch."
+                "The compile error is likely coming from missing visibility, wrong namespace, or incompatible call-site usage."
             )
+            suggested_fix = "Compare the failing use with the top-ranked declaration or implementation and check include, namespace, and signature details."
             confidence = "high" if symbol else "medium"
         else:
             likely_cause = (
                 "The parser extracted a compiler failure, but retrieval evidence is still broad rather than symbol-specific."
             )
+            suggested_fix = "Inspect the top-ranked files and rerun with a fuller compiler diagnostic if available."
             confidence = "low"
 
-        suggested_fix = "Compare the failing call/site with the top-ranked declaration or implementation and check include/namespace/signature details."
         evidence = self._common_evidence(parsed_log, results, compile_entry)
         if symbol:
             evidence.insert(0, f"Compiler symbol: {symbol}")
+        evidence.append(f"Compiler failure pattern: {failure_kind}")
+        if getattr(parsed_log, "build_targets", []):
+            evidence.append("Build target hint(s) from log: " + ", ".join(parsed_log.build_targets))
         return DiagnosisReport(
             error_type=parsed_log.error_type,
             summary=summary,
@@ -489,3 +537,43 @@ class FailureDiagnoser:
             and value.replace("_", "").isalnum()
             and value == value.lower()
         )
+
+    def _compiler_failure_kind(self, parsed_log, symbol: str) -> str:
+        """Classify compiler diagnostics into fix-oriented buckets."""
+        text = f"{getattr(parsed_log, 'error_message', '')}\n{getattr(parsed_log, 'raw_log', '')}".lower()
+        symbol_value = symbol or ""
+
+        if self._looks_like_macro(symbol_value) and (
+            "undeclared identifier" in text
+            or "was not declared" in text
+            or "has not been declared" in text
+        ):
+            return "platform_macro"
+        if "no matching function for call" in text or "no matching constructor" in text:
+            if self._looks_like_constructor_symbol(symbol_value) or "constructor" in text:
+                return "constructor_signature"
+            return "call_signature"
+        if "has no member named" in text or "is not a member of" in text:
+            return "member_lookup"
+        if "does not name a type" in text or "invalid use of incomplete type" in text:
+            return "type_visibility"
+        if "no declaration matches" in text:
+            return "call_signature"
+        return "generic"
+
+    def _looks_like_macro(self, symbol: str) -> bool:
+        """Return True for C-style macro/config identifiers such as MAP_ANONYMOUS."""
+        value = (symbol or "").strip()
+        return bool(
+            value
+            and value.upper() == value
+            and "_" in value
+            and re.fullmatch(r"[A-Z][A-Z0-9_]*", value)
+        )
+
+    def _looks_like_constructor_symbol(self, symbol: str) -> bool:
+        """Detect qualified constructor names like absl::Condition::Condition."""
+        parts = [part for part in (symbol or "").split("::") if part]
+        if len(parts) < 2:
+            return False
+        return parts[-1].split("<", 1)[0] == parts[-2].split("<", 1)[0]

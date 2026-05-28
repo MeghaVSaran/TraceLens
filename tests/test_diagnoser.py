@@ -123,6 +123,54 @@ def test_include_diagnosis_uses_compile_command_context(tmp_path):
     assert any("Compile command matched" in item for item in diagnosis.evidence)
 
 
+def test_compiler_diagnosis_explains_overload_type_mismatch():
+    diagnoser = FailureDiagnoser()
+    parsed = parse_log(
+        "failure_signal_handler.cc:426:15: error: no matching function for call to 'max'\n"
+        "return std::max(frame_count, 1);\n"
+        "note: candidate template ignored: deduced conflicting types for parameter 'const _Tp' ('long int' vs. 'int')\n"
+    )
+    results = [_result("absl/debugging/failure_signal_handler.cc", "InstallFailureSignalHandler", 426, 0.91)]
+
+    diagnosis = diagnoser.diagnose(parsed, results)
+
+    assert diagnosis.error_type == "compiler_error"
+    assert "overload/type mismatch" in diagnosis.likely_cause
+    assert "argument types" in diagnosis.suggested_fix
+    assert any("Compiler failure pattern: call_signature" in item for item in diagnosis.evidence)
+
+
+def test_compiler_diagnosis_treats_uppercase_identifier_as_platform_macro():
+    diagnoser = FailureDiagnoser()
+    parsed = parse_log(
+        "examine_stack.cc:146:20: error: use of undeclared identifier 'MAP_ANONYMOUS'\n"
+    )
+    results = [_result("absl/debugging/internal/examine_stack.cc", "__file__", 1, 0.88)]
+
+    diagnosis = diagnoser.diagnose(parsed, results)
+
+    assert diagnosis.error_type == "compiler_error"
+    assert "platform or feature-test macro" in diagnosis.likely_cause
+    assert "missing namespace" not in diagnosis.likely_cause
+    assert "feature-test macros" in diagnosis.suggested_fix
+    assert any("Compiler failure pattern: platform_macro" in item for item in diagnosis.evidence)
+
+
+def test_compiler_diagnosis_surfaces_build_target_hint_without_compile_entry():
+    diagnoser = FailureDiagnoser()
+    parsed = parse_log(
+        "CMakeFiles/absl_mutex_test.dir/absl/synchronization/mutex_test.cc.o: "
+        "mutex_test.cc:91:10: error: no matching function for call to 'absl::Condition::Condition'\n"
+    )
+    results = [_result("absl/synchronization/mutex.h", "Condition::Condition", 327, 0.9, "Condition")]
+
+    diagnosis = diagnoser.diagnose(parsed, results)
+
+    assert "constructor call" in diagnosis.likely_cause
+    assert any("Build target hint(s) from log: absl_mutex_test" in item for item in diagnosis.evidence)
+    assert any("Compiler failure pattern: constructor_signature" in item for item in diagnosis.evidence)
+
+
 def test_memory_diagnosis_surfaces_stack_evidence():
     diagnoser = FailureDiagnoser()
     parsed = parse_log(
