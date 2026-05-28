@@ -15,6 +15,7 @@ from src.ingestion.log_parser import (
     extract_error_type,
     extract_identifiers,
     extract_file_hints,
+    extract_build_targets,
     extract_source_paths,
 )
 
@@ -667,6 +668,21 @@ class TestSourcePathExtraction:
         target.touch()
         paths = extract_source_paths(self.LOG_CMAKE_OBJECT_PATH, repo_root=tmp_path)
         assert "absl/flags/internal/flag.cc" in paths
+
+
+class TestBuildTargetExtraction:
+    LOG = (
+        "/usr/bin/ld: CMakeFiles/flags_internal.dir/internal/flag.cc.o:"
+        " undefined reference to `absl::CommandLineFlag::IsRetired() const'\n"
+    )
+
+    def test_extract_build_targets(self):
+        targets = extract_build_targets(self.LOG)
+        assert "flags_internal" in targets
+
+    def test_parse_log_populates_build_targets(self):
+        parsed = parse_log(self.LOG)
+        assert "flags_internal" in parsed.build_targets
 
 
 # ---------------------------------------------------------------------------

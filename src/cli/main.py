@@ -256,6 +256,7 @@ def index(repo, force_reindex, device, include_tests, embedding_model):
             "embedding_backend": embedder.embedding_backend,
             "model_name": embedder.model_name,
             "num_chunks": len(chunks),
+            "include_tests": include_tests,
             "indexed_at": datetime.now().isoformat(),
         })
 
@@ -574,6 +575,12 @@ def info(repo):
             except Exception:
                 pass
         click.echo(f"Chunks:      {chunk_count}")
+
+        meta = _load_index_metadata(debugaid_path)
+        if meta:
+            include_tests = meta.get("include_tests")
+            if include_tests is not None:
+                click.echo(f"Include tests:{' yes' if include_tests else ' no'}")
 
         # Index size on disk.
         total_size = sum(

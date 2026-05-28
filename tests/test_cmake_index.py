@@ -40,3 +40,19 @@ def test_cmake_index_handles_subdirectory_cmakelists(tmp_path):
     targets = index.get_targets_for_file("module/worker.cc")
     assert len(targets) == 1
     assert targets[0].defined_in == "module/CMakeLists.txt"
+
+
+def test_cmake_index_finds_target_by_hint_suffix(tmp_path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True)
+    (repo_root / "CMakeLists.txt").write_text(
+        "add_library(absl_flags_internal flag.cc)\n",
+        encoding="utf-8",
+    )
+    (repo_root / "flag.cc").write_text("void x() {}\n", encoding="utf-8")
+
+    index = CMakeProjectIndex.from_repo(repo_root)
+    targets = index.find_targets_by_hint("flags_internal")
+
+    assert len(targets) == 1
+    assert targets[0].name == "absl_flags_internal"

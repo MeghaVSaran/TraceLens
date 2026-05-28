@@ -14,6 +14,20 @@ from src.retrieval.hybrid_retriever import RetrievalResult
 
 HEADER_SUFFIXES = {".h", ".hh", ".hpp", ".hxx"}
 SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx"}
+COMMON_EXTERNAL_LINKER_SYMBOLS = {
+    "ceil", "ceilf", "ceill", "floor", "floorf", "floorl", "round", "roundf",
+    "sqrt", "sqrtf", "sqrtl", "pow", "powf", "powl", "sin", "sinf", "cos",
+    "cosf", "tan", "tanf", "exp", "expf", "log", "logf", "fabs", "fabsf",
+    "fmod", "fmodf", "trunc", "truncf", "nearbyint", "nearbyintf", "pthread_create",
+    "pthread_join", "pthread_mutex_lock", "pthread_mutex_unlock", "dlopen",
+    "dlsym", "dlclose", "clock_gettime", "backtrace", "backtrace_symbols",
+    "malloc", "calloc", "realloc", "free",
+}
+EXTERNAL_LINKER_PREFIXES = (
+    "__cxa_", "__gxx_", "__libc_", "_z", "pthread_", "std::", "operator new",
+    "operator delete", "dl", "clock_", "sin", "cos", "tan", "sqrt", "ceil",
+    "floor", "round", "pow", "exp", "log", "fabs", "fmod", "trunc",
+)
 
 
 @dataclass
@@ -122,13 +136,22 @@ class FailureDiagnoser:
         decl_site = repo_sites.get("declaration")
         def_site = repo_sites.get("definition")
         failing_target, provider_targets = self._infer_link_targets(
+            parsed_log,
             compile_entry,
             definition_result=definition,
             definition_site=def_site,
         )
         summary = f"Linker failure around {symbol or 'an unresolved symbol'}."
 
-        if failing_target and provider_targets and not self._target_links_any(failing_target, provider_targets):
+        if self._is_external_linker_symbol(symbol, decl_site, def_site):
+            likely_cause = (
+                f"{symbol or 'The unresolved symbol'} looks like an external runtime or system-library symbol rather than a repo-owned C++ symbol."
+            )
+            suggested_fix = (
+                "Check linker flags and system-library dependencies for the failing target, such as math, pthread, dl, or C++ runtime linkage."
+            )
+            confidence = "high"
+        elif failing_target and provider_targets and not self._target_links_any(failing_target, provider_targets):
             provider_names = ", ".join(provider.name for provider in provider_targets)
             likely_cause = (
                 f"{symbol or 'The symbol'} resolves to provider target(s) {provider_names}, but the failing target "
@@ -173,6 +196,8 @@ class FailureDiagnoser:
         evidence = self._common_evidence(parsed_log, results, compile_entry)
         if symbol:
             evidence.insert(0, f"Linker symbol: {symbol}")
+        if self._is_external_linker_symbol(symbol, decl_site, def_site):
+            evidence.append("Symbol classified as external/system-library style.")
         if decl_site:
             evidence.append(f"Repo declaration site: {decl_site.file_path}:{decl_site.line_number}")
         elif decl:
@@ -183,6 +208,8 @@ class FailureDiagnoser:
             evidence.append(f"Definition candidate: {definition.file_path}:{definition.start_line}")
         if failing_target:
             evidence.append(f"Failing source appears in target: {failing_target.name}")
+        elif getattr(parsed_log, "build_targets", []):
+            evidence.append("Build target hint(s) from log: " + ", ".join(parsed_log.build_targets))
         if provider_targets:
             evidence.append(
                 "Definition provider target(s): " + ", ".join(target.name for target in provider_targets)
@@ -390,14 +417,20 @@ class FailureDiagnoser:
             candidate_files=candidate_files,
         )
 
-    def _infer_link_targets(self, compile_entry, definition_result, definition_site):
+    def _infer_link_targets(self, parsed_log, compile_entry, definition_result, definition_site):
         """Infer failing and provider targets from compile/CMake metadata."""
         if not self.cmake_index:
             return None, []
         failing_target = None
         provider_targets = []
 
-        if compile_entry is not None:
+        for hint in getattr(parsed_log, "build_targets", []):
+            hinted_targets = self.cmake_index.find_targets_by_hint(hint)
+            if hinted_targets:
+                failing_target = hinted_targets[0]
+                break
+
+        if failing_target is None and compile_entry is not None:
             candidates = self.cmake_index.get_targets_for_file(compile_entry.file_path)
             if candidates:
                 failing_target = candidates[0]
@@ -418,3 +451,22 @@ class FailureDiagnoser:
             return False
         linked = set(target.links)
         return any(provider.name in linked for provider in providers)
+
+    def _is_external_linker_symbol(self, symbol: str, decl_site, def_site) -> bool:
+        """Heuristic classifier for system/runtime linker symbols."""
+        value = (symbol or "").strip()
+        if not value:
+            return False
+        normalized = value.lower()
+        if normalized in COMMON_EXTERNAL_LINKER_SYMBOLS:
+            return True
+        if any(normalized.startswith(prefix.lower()) for prefix in EXTERNAL_LINKER_PREFIXES):
+            return True
+        if decl_site is not None or def_site is not None:
+            return False
+        return bool(
+            "::" not in value
+            and len(value) <= 32
+            and value.replace("_", "").isalnum()
+            and value == value.lower()
+        )

@@ -173,6 +173,9 @@ _RE_OBJECT_PATH = re.compile(
 _RE_CMAKE_OBJECT = re.compile(
     r"CMakeFiles[\\/][^\\/]+\.dir[\\/](.+?\.(?:cc|cpp|h|hpp|c|cxx|hxx))(?:\.pic)?\.o\b"
 )
+_RE_CMAKE_TARGET = re.compile(
+    r"CMakeFiles[\\/](?P<target>[^\\/]+)\.dir[\\/](?P<path>.+?\.(?:cc|cpp|h|hpp|c|cxx|hxx))(?:\.pic)?\.o\b"
+)
 _RE_BUILD_COMPONENT_DIR = re.compile(
     r"cd\s+[^\n]*?/(absl/[A-Za-z0-9_./-]+)\s*(?:&&|$)"
 )
@@ -220,6 +223,7 @@ class ParsedLog:
     file_hints: List[str] = field(default_factory=list)    # filenames mentioned
     stack_frames: List[str] = field(default_factory=list)  # segfault frame lines
     source_paths: List[str] = field(default_factory=list)  # normalized file paths from log
+    build_targets: List[str] = field(default_factory=list) # target hints from build-system paths
 
 
     def query_text(self) -> str:
@@ -239,7 +243,7 @@ class ParsedLog:
             if len(parts) > 1:
                 expanded.extend(p.lower() for p in parts if len(p) >= 2)
 
-        parts = [self.error_message] + expanded + self.file_hints
+        parts = [self.error_message] + expanded + self.file_hints + self.build_targets
         return " ".join(parts)
 
 
@@ -271,6 +275,7 @@ def parse_log(log_text: str, repo_root: Optional[Path] = None) -> ParsedLog:
         file_hints=file_hints,
         stack_frames=stack_frames,
         source_paths=extract_source_paths(normalized_log, repo_root=repo_root),
+        build_targets=extract_build_targets(normalized_log),
     )
     logger.debug("Parsed log → type=%s, identifiers=%s", error_type, identifiers)
     return parsed
@@ -394,6 +399,19 @@ def extract_file_hints(log_text: str) -> List[str]:
             seen.add(fname)
             result.append(fname)
 
+    return result
+
+
+def extract_build_targets(log_text: str) -> List[str]:
+    """Extract CMake target hints from object-file paths in logs."""
+    log_text = _normalize_log_text(log_text)
+    seen: set[str] = set()
+    result: List[str] = []
+    for match in _RE_CMAKE_TARGET.finditer(log_text):
+        target = match.group("target").strip()
+        if target and target not in seen:
+            seen.add(target)
+            result.append(target)
     return result
 
 

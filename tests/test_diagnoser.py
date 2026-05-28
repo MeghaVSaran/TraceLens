@@ -137,3 +137,58 @@ def test_memory_diagnosis_surfaces_stack_evidence():
     assert diagnosis.error_type == "segfault"
     assert diagnosis.confidence == "medium"
     assert any("Stack frame:" in item for item in diagnosis.evidence)
+
+
+def test_external_linker_symbol_is_treated_as_system_library_issue():
+    diagnoser = FailureDiagnoser()
+    parsed = parse_log(
+        "/usr/bin/ld: low_level_alloc_test.cc.o: undefined reference to `ceilf'\n"
+    )
+    results = [
+        _result("absl/base/internal/low_level_alloc.h", "__file__", 1, 0.95),
+        _result("absl/synchronization/mutex.cc", "ScopedDeadlockReportBuffers", 1365, 0.58),
+    ]
+
+    diagnosis = diagnoser.diagnose(parsed, results)
+
+    assert diagnosis.error_type == "linker_error"
+    assert "external runtime or system-library symbol" in diagnosis.likely_cause
+    assert any("external/system-library" in item for item in diagnosis.evidence)
+
+
+def test_linker_target_hint_is_used_when_compile_entry_mapping_is_missing(tmp_path):
+    repo_root = tmp_path / "repo"
+    provider_dir = repo_root / "absl" / "flags"
+    consumer_dir = provider_dir / "internal"
+    provider_dir.mkdir(parents=True)
+    consumer_dir.mkdir(parents=True)
+    (provider_dir / "commandlineflag.cc").write_text(
+        "bool CommandLineFlag::IsRetired() const { return false; }\n",
+        encoding="utf-8",
+    )
+    (provider_dir / "commandlineflag.h").write_text(
+        "class CommandLineFlag { public: bool IsRetired() const; };\n",
+        encoding="utf-8",
+    )
+    (consumer_dir / "flag.cc").write_text("void use_flag() {}\n", encoding="utf-8")
+    (repo_root / "CMakeLists.txt").write_text(
+        "add_library(absl_flags_internal absl/flags/internal/flag.cc)\n"
+        "add_library(absl_flags absl/flags/commandlineflag.cc)\n",
+        encoding="utf-8",
+    )
+    cmake_index = CMakeProjectIndex.from_repo(repo_root)
+    diagnoser = FailureDiagnoser(repo_root=repo_root, cmake_index=cmake_index)
+    parsed = parse_log(
+        "/usr/bin/ld: CMakeFiles/flags_internal.dir/internal/flag.cc.o:"
+        " undefined reference to `absl::CommandLineFlag::IsRetired() const'\n",
+        repo_root=repo_root,
+    )
+    results = [
+        _result("absl/flags/commandlineflag.cc", "CommandLineFlag::IsRetired", 1, 1.0, "IsRetired"),
+        _result("absl/flags/internal/flag.cc", "__file__", 1, 0.95),
+    ]
+
+    diagnosis = diagnoser.diagnose(parsed, results)
+
+    assert any("Failing source appears in target: absl_flags_internal" in item for item in diagnosis.evidence)
+    assert any("Definition provider target(s): absl_flags" in item for item in diagnosis.evidence)

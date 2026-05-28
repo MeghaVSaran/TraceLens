@@ -75,6 +75,27 @@ class CMakeProjectIndex:
         """Return a target by exact name."""
         return self._targets_by_name.get(name)
 
+    def find_targets_by_hint(self, hint: str) -> list[CMakeTarget]:
+        """Resolve a build-target hint against known target names."""
+        hint = str(hint or "").strip()
+        if not hint:
+            return []
+        exact = self.get_target(hint)
+        if exact is not None:
+            return [exact]
+        matches = [
+            target for target in self.targets
+            if target.name.endswith(hint) or target.name.endswith(f"_{hint}")
+        ]
+        # Preserve deterministic order and avoid duplicates.
+        seen: set[str] = set()
+        resolved: list[CMakeTarget] = []
+        for target in matches:
+            if target.name not in seen:
+                seen.add(target.name)
+                resolved.append(target)
+        return resolved
+
 
 def _extract_cmake_commands(text: str) -> list[tuple[str, str]]:
     """Extract top-level cmake commands with their raw argument strings."""
