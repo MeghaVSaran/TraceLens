@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Iterable, Optional
 
+from src.analysis.cmake_index import CMakeProjectIndex
 from src.analysis.compile_commands import CompileCommandsIndex
 from src.analysis.symbol_locator import locate_symbol_sites
 from src.retrieval.hybrid_retriever import RetrievalResult
@@ -40,9 +41,11 @@ class FailureDiagnoser:
         self,
         repo_root: Optional[Path] = None,
         compile_commands: Optional[CompileCommandsIndex] = None,
+        cmake_index: Optional[CMakeProjectIndex] = None,
     ):
         self.repo_root = Path(repo_root).resolve() if repo_root is not None else None
         self.compile_commands = compile_commands
+        self.cmake_index = cmake_index
 
     def diagnose(self, parsed_log, results: Iterable[RetrievalResult]) -> DiagnosisReport:
         """Create a structured diagnosis for the given failure."""
@@ -118,9 +121,24 @@ class FailureDiagnoser:
         repo_sites = self._lookup_symbol_sites(symbol, primary_files)
         decl_site = repo_sites.get("declaration")
         def_site = repo_sites.get("definition")
+        failing_target, provider_targets = self._infer_link_targets(
+            compile_entry,
+            definition_result=definition,
+            definition_site=def_site,
+        )
         summary = f"Linker failure around {symbol or 'an unresolved symbol'}."
 
-        if decl_site and def_site:
+        if failing_target and provider_targets and not self._target_links_any(failing_target, provider_targets):
+            provider_names = ", ".join(provider.name for provider in provider_targets)
+            likely_cause = (
+                f"{symbol or 'The symbol'} resolves to provider target(s) {provider_names}, but the failing target "
+                f"{failing_target.name} does not appear to link them."
+            )
+            suggested_fix = (
+                f"Add the provider target to target_link_libraries({failing_target.name} ...) or otherwise route its object/library into the link step."
+            )
+            confidence = "high"
+        elif decl_site and def_site:
             likely_cause = (
                 f"{symbol or 'The symbol'} appears declared in {decl_site.file_path} and defined in "
                 f"{def_site.file_path}, which strongly suggests the defining object or library is missing from the failing link."
@@ -163,6 +181,12 @@ class FailureDiagnoser:
             evidence.append(f"Repo definition site: {def_site.file_path}:{def_site.line_number}")
         elif definition:
             evidence.append(f"Definition candidate: {definition.file_path}:{definition.start_line}")
+        if failing_target:
+            evidence.append(f"Failing source appears in target: {failing_target.name}")
+        if provider_targets:
+            evidence.append(
+                "Definition provider target(s): " + ", ".join(target.name for target in provider_targets)
+            )
 
         return DiagnosisReport(
             error_type=parsed_log.error_type,
@@ -365,3 +389,32 @@ class FailureDiagnoser:
             symbol,
             candidate_files=candidate_files,
         )
+
+    def _infer_link_targets(self, compile_entry, definition_result, definition_site):
+        """Infer failing and provider targets from compile/CMake metadata."""
+        if not self.cmake_index:
+            return None, []
+        failing_target = None
+        provider_targets = []
+
+        if compile_entry is not None:
+            candidates = self.cmake_index.get_targets_for_file(compile_entry.file_path)
+            if candidates:
+                failing_target = candidates[0]
+
+        provider_file = ""
+        if definition_site is not None:
+            provider_file = definition_site.file_path
+        elif definition_result is not None:
+            provider_file = definition_result.file_path
+        if provider_file:
+            provider_targets = self.cmake_index.get_targets_for_file(provider_file)
+
+        return failing_target, provider_targets
+
+    def _target_links_any(self, target, providers) -> bool:
+        """Return True if a target already links any provider target name."""
+        if target is None or not providers:
+            return False
+        linked = set(target.links)
+        return any(provider.name in linked for provider in providers)

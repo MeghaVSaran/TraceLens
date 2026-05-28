@@ -2,6 +2,7 @@
 
 import json
 
+from src.analysis.cmake_index import CMakeProjectIndex
 from src.analysis.compile_commands import CompileCommandsIndex
 from src.analysis.diagnoser import FailureDiagnoser
 from src.ingestion.log_parser import parse_log
@@ -27,13 +28,25 @@ def test_linker_diagnosis_mentions_declaration_and_definition(tmp_path):
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     include_dir = repo_root / "absl" / "strings"
+    src_dir = repo_root / "src"
     include_dir.mkdir(parents=True)
+    src_dir.mkdir(parents=True)
     (include_dir / "str_cat.h").write_text(
         "namespace absl { std::string StrCat(); }\n",
         encoding="utf-8",
     )
     (include_dir / "str_cat.cc").write_text(
         "namespace absl { std::string StrCat() { return {}; } }\n",
+        encoding="utf-8",
+    )
+    (src_dir / "use_str_cat.cpp").write_text(
+        '#include "absl/strings/str_cat.h"\n'
+        "int main() { return 0; }\n",
+        encoding="utf-8",
+    )
+    (repo_root / "CMakeLists.txt").write_text(
+        "add_library(absl_strings absl/strings/str_cat.cc)\n"
+        "add_executable(app src/use_str_cat.cpp)\n",
         encoding="utf-8",
     )
     db_path = repo_root / "compile_commands.json"
@@ -48,7 +61,12 @@ def test_linker_diagnosis_mentions_declaration_and_definition(tmp_path):
         encoding="utf-8",
     )
     compile_commands = CompileCommandsIndex.from_file(db_path, repo_root=repo_root)
-    diagnoser = FailureDiagnoser(repo_root=repo_root, compile_commands=compile_commands)
+    cmake_index = CMakeProjectIndex.from_repo(repo_root)
+    diagnoser = FailureDiagnoser(
+        repo_root=repo_root,
+        compile_commands=compile_commands,
+        cmake_index=cmake_index,
+    )
     parsed = parse_log(
         "/usr/bin/ld: undefined reference to `absl::StrCat`\n"
         "src/use_str_cat.cpp:(.text+0x1): undefined reference\n"
@@ -63,9 +81,11 @@ def test_linker_diagnosis_mentions_declaration_and_definition(tmp_path):
 
     assert diagnosis.error_type == "linker_error"
     assert diagnosis.confidence == "high"
-    assert "declared" in diagnosis.likely_cause
+    assert "does not appear to link" in diagnosis.likely_cause
     assert "absl/strings/str_cat.cc" in " ".join(diagnosis.evidence)
     assert any("Repo declaration site" in item for item in diagnosis.evidence)
+    assert any("Failing source appears in target: app" in item for item in diagnosis.evidence)
+    assert any("Definition provider target(s): absl_strings" in item for item in diagnosis.evidence)
 
 
 def test_include_diagnosis_uses_compile_command_context(tmp_path):

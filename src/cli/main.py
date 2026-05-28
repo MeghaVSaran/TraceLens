@@ -107,15 +107,18 @@ def _triage_log(
     diagnosis = None
     compile_commands_path = None
     if diagnose:
+        from src.analysis.cmake_index import CMakeProjectIndex
         from src.analysis.diagnoser import FailureDiagnoser
 
         compile_commands, compile_commands_path = _load_compile_commands_index(
             repo_path,
             build_dir=build_dir,
         )
+        cmake_index = CMakeProjectIndex.from_repo(repo_path)
         diagnoser = FailureDiagnoser(
             repo_root=repo_path,
             compile_commands=compile_commands,
+            cmake_index=cmake_index,
         )
         diagnosis = diagnoser.diagnose(parsed_log, results)
 
