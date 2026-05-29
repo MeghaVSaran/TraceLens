@@ -19,10 +19,16 @@ import logging
 import os
 import re
 import time
+import argparse
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from github import Github, GithubException, Auth
+try:
+    from github import Github, GithubException, Auth
+except ModuleNotFoundError:
+    Github = None
+    GithubException = Exception
+    Auth = None
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -42,10 +48,18 @@ PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
 
 ERROR_KEYWORDS: List[str] = [
     "undefined reference",
+    "undefined symbol",
     "no such file or directory",
     "undeclared identifier",
     "segmentation fault",
+    "stack dump",
+    "AddressSanitizer",
+    "heap-buffer-overflow",
+    "use-after-free",
     "no matching function",
+    "CMake Error",
+    "No rule to make target",
+    "used but never defined",
 ]
 
 # Repos to mine (owner/name)
@@ -53,6 +67,11 @@ TARGET_REPOS: List[str] = [
     "llvm/llvm-project",
     "opencv/opencv",
     "abseil/abseil-cpp",
+    "verilator/verilator",
+    "YosysHQ/yosys",
+    "The-OpenROAD-Project/OpenROAD",
+    "protocolbuffers/protobuf",
+    "fmtlib/fmt",
 ]
 
 MAX_RETRIES = 3
@@ -85,7 +104,11 @@ _ERROR_TYPE_PATTERNS: List[tuple[str, re.Pattern[str]]] = [
     ("linker_error", re.compile(
         r"undefined reference to\s+", re.IGNORECASE)),
     ("linker_error", re.compile(
+        r"undefined symbol", re.IGNORECASE)),
+    ("linker_error", re.compile(
         r"multiple definition of\s+", re.IGNORECASE)),
+    ("linker_error", re.compile(
+        r"used but never defined", re.IGNORECASE)),
     ("compiler_error", re.compile(
         r"use of undeclared identifier\s+", re.IGNORECASE)),
     ("compiler_error", re.compile(
@@ -375,6 +398,11 @@ def mine_repo(
     """
     # ---- GitHub client setup -----------------------------------------------
     if github_client is None:
+        if Github is None or Auth is None:
+            raise EnvironmentError(
+                "PyGithub is required for mining. Install requirements.txt "
+                "or run: pip install PyGithub"
+            )
         token = os.environ.get("GITHUB_TOKEN")
         if not token:
             raise EnvironmentError(
@@ -512,15 +540,30 @@ def mine_repo(
 
 def main() -> None:
     """Mine all target repos and merge results."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--repos",
+        nargs="+",
+        default=TARGET_REPOS,
+        help="GitHub repositories to mine, e.g. llvm/llvm-project verilator/verilator.",
+    )
+    parser.add_argument(
+        "--max-issues",
+        type=int,
+        default=200,
+        help="Maximum issues to inspect per repository.",
+    )
+    args = parser.parse_args()
+
     # Ensure output directories exist
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 
     all_results: List[Dict] = []
 
-    for repo_name in TARGET_REPOS:
+    for repo_name in args.repos:
         try:
-            pairs = mine_repo(repo_name)
+            pairs = mine_repo(repo_name, max_issues=args.max_issues)
             all_results.extend(pairs)
         except Exception as exc:
             logger.error("Failed to mine %s: %s", repo_name, exc)

@@ -1,0 +1,138 @@
+{
+  "source_dataset": "data/processed/github_pairs.json",
+  "total_samples": 71,
+  "repos": [
+    {
+      "repo": "abseil/abseil-cpp",
+      "slug": "abseil_abseil_cpp",
+      "profile": "small_modern_cpp_library",
+      "clone_url": "https://github.com/abseil/abseil-cpp.git",
+      "dataset": "data/real_eval/abseil_abseil_cpp.json",
+      "samples": 21,
+      "error_types": {
+        "compiler_error": 10,
+        "include_error": 1,
+        "linker_error": 9,
+        "segfault": 1
+      },
+      "pathlike_logs": 20,
+      "notes": "Good fast sanity target, but not enough by itself."
+    },
+    {
+      "repo": "llvm/llvm-project",
+      "slug": "llvm_llvm_project",
+      "profile": "very_large_compiler_infra",
+      "clone_url": "https://github.com/llvm/llvm-project.git",
+      "dataset": "data/real_eval/llvm_llvm_project.json",
+      "samples": 42,
+      "error_types": {
+        "compiler_error": 10,
+        "linker_error": 8,
+        "segfault": 24
+      },
+      "pathlike_logs": 22,
+      "notes": "Closest current proxy for compiler/IR-heavy industrial C++."
+    },
+    {
+      "repo": "opencv/opencv",
+      "slug": "opencv_opencv",
+      "profile": "large_runtime_library",
+      "clone_url": "https://github.com/opencv/opencv.git",
+      "dataset": "data/real_eval/opencv_opencv.json",
+      "samples": 8,
+      "error_types": {
+        "compiler_error": 2,
+        "segfault": 6
+      },
+      "pathlike_logs": 4,
+      "notes": "Large C++ runtime/library codebase with platform and build failures."
+    }
+  ],
+  "future_target_repos": [
+    {
+      "repo": "verilator/verilator",
+      "profile": "open_source_eda_simulator",
+      "why": "EDA-relevant C++ compiler/simulator with realistic build, parser, and runtime failures."
+    },
+    {
+      "repo": "YosysHQ/yosys",
+      "profile": "open_source_synthesis_tool",
+      "why": "EDA-relevant synthesis codebase with C++ passes and frontend/backend failures."
+    },
+    {
+      "repo": "The-OpenROAD-Project/OpenROAD",
+      "profile": "open_source_physical_design",
+      "why": "Closest public proxy for large EDA toolchains and complex CMake/dependency issues."
+    },
+    {
+      "repo": "protocolbuffers/protobuf",
+      "profile": "large_codegen_runtime",
+      "why": "Generated-code and ABI/build failures are common in industrial C++."
+    },
+    {
+      "repo": "fmtlib/fmt",
+      "profile": "small_template_heavy_library",
+      "why": "Small but template-heavy, useful for quick pathless compiler-error checks."
+    }
+  ],
+  "audit": {
+    "raw": {
+      "n": 81,
+      "repos": {
+        "abseil/abseil-cpp": 22,
+        "llvm/llvm-project": 51,
+        "opencv/opencv": 8
+      },
+      "error_types": {
+        "compiler_error": 22,
+        "include_error": 1,
+        "linker_error": 17,
+        "segfault": 31,
+        "unknown": 10
+      },
+      "pathlike_logs": 52,
+      "strict_pathless_needed": 52,
+      "relevant_file_counts": {
+        "1": 25,
+        "2": 23,
+        "3": 15,
+        "4": 3,
+        "5": 8,
+        "6": 3,
+        "7": 1,
+        "8": 1,
+        "9": 1,
+        "10": 1
+      }
+    },
+    "usable": {
+      "n": 71,
+      "repos": {
+        "abseil/abseil-cpp": 21,
+        "llvm/llvm-project": 42,
+        "opencv/opencv": 8
+      },
+      "error_types": {
+        "compiler_error": 22,
+        "include_error": 1,
+        "linker_error": 17,
+        "segfault": 31
+      },
+      "pathlike_logs": 46,
+      "strict_pathless_needed": 46,
+      "relevant_file_counts": {
+        "1": 21,
+        "2": 22,
+        "3": 14,
+        "4": 2,
+        "5": 6,
+        "6": 2,
+        "7": 1,
+        "8": 1,
+        "9": 1,
+        "10": 1
+      }
+    },
+    "dropped_samples": 10
+  }
+}

@@ -1,0 +1,101 @@
+[
+  {
+    "id": "opencv_opencv-issue-28385",
+    "log": "root@4c02892097d8:/home# ./a.out\nSegmentation fault (core dumped)",
+    "relevant_files": [
+      "modules/imgproc/src/median_blur.simd.hpp",
+      "modules/imgproc/test/test_filter.cpp"
+    ],
+    "error_type": "segfault",
+    "source": "github",
+    "repo": "opencv/opencv",
+    "issue_url": "https://github.com/opencv/opencv/issues/28385"
+  },
+  {
+    "id": "opencv_opencv-issue-28095",
+    "log": "[loongson@localhost opencv-4.8.1]$ ./loongnix-linux-build/bin/opencv_test_gapi --gtest_filter=StatefulKernel.StateInitOnceInRegularMode\nCTEST_FULL_OUTPUT\nOpenCV version: 4.8.1\nOpenCV VCS version: unknown\nBuild type: ReleaseWithDebInfo\nWARNING: build value differs from runtime: Release\nCompiler: /usr/bin/g++  (ver 12.3.0)\n[ INFO:0@0.125] global registry_parallel.impl.hpp:96 ParallelBackendRegistry core(parallel): Enabled backends(2, sorted by priority): TBB(1000); OPENMP(990)\n[ INFO:0@0.125] global parallel_for.tbb.hpp:54 ParallelForBackend Initializing TBB parallel backend: TBB_INTERFACE_VERSION=12110\n[ INFO:0@0.125] global parallel.cpp:77 createParallelForAPI core(parallel): using backend: TBB (priority=1000)\nParallel framework: tbb (nthreads=128)\nCPU features: LSX *LASX\nTEST: Skip tests with tags: 'mem_6gb', 'verylong'\nNote: Google Test filter = StatefulKernel.StateInitOnceInRegularMode\n[==========] Running 1 test from 1 test case.\n[----------] Global test environment set-up.\n[----------] 1 test from StatefulKernel\n[ RUN      ] StatefulKernel.StateInitOnceInRegularMode\n[ INFO:0@0.138] global kernels.cpp:258 expandKernels Final graph: 3 nodes\n\n[ INFO:0@0.139] global gcompiler.cpp:415 runPasses All compiler passes are successful\n/usr/include/c++/12/bits/shared_ptr_base.h:1349: std::__shared_ptr_access<_Tp, _Lp, <anonymous>, <anonymous> >::element_type& std::__shared_ptr_access<_Tp, _Lp, <anonymous>, <anonymous> >::operator*() const [with _Tp = int; __gnu_cxx::_Lock_policy _Lp = __gnu_cxx::_S_atomic; bool <anonymous> = false; bool <anonymous> = false; element_type = int]: Assertion '_M_get() != nullptr' failed.\nSegmentation fault（核心已转储）",
+    "relevant_files": [
+      "modules/gapi/include/opencv2/gapi/cpu/gcpukernel.hpp",
+      "modules/gapi/test/cpu/gapi_ocv_stateful_kernel_tests.cpp"
+    ],
+    "error_type": "segfault",
+    "source": "github",
+    "repo": "opencv/opencv",
+    "issue_url": "https://github.com/opencv/opencv/issues/28095"
+  },
+  {
+    "id": "opencv_opencv-issue-27907",
+    "log": "[ 32%] Building CXX object modules/videoio/CMakeFiles/opencv_videoio.dir/src/cap_ffmpeg.cpp.o\nIn file included from /Users/thewoz/Downloads/opencv-4.12.0 2/modules/videoio/src/cap_ffmpeg.cpp:50:\n/Users/thewoz/Downloads/opencv-4.12.0 2/modules/videoio/src/cap_ffmpeg_impl.hpp:688:9: error: use of undeclared identifier 'avcodec_close'; did you mean 'avio_close'?\n  688 |         avcodec_close( context );\n      |         ^~~~~~~~~~~~~\n      |         avio_close\n/usr/local/include/libavformat/avio.h:693:5: note: 'avio_close' declared here\n  693 | int avio_close(AVIOContext *s);\n      |     ^\nIn file included from /Users/thewoz/Downloads/opencv-4.12.0 2/modules/videoio/src/cap_ffmpeg.cpp:50:\n/Users/thewoz/Downloads/opencv-4.12.0 2/modules/videoio/src/cap_ffmpeg_impl.hpp:688:24: error: cannot initialize a parameter of type 'AVIOContext *' with an lvalue of type 'AVCodecContext *'\n  688 |         avcodec_close( context );\n      |                        ^~~~~~~\n/usr/local/include/libavformat/avio.h:693:29: note: passing argument to parameter 's' here\n  693 | int avio_close(AVIOContext *s);\n      |                             ^\nIn file included from /Users/thewoz/Downloads/opencv-4.12.0 2/modules/videoio/src/cap_ffmpeg.cpp:50:\n/Users/thewoz/Downloads/opencv-4.12.0 2/modules/videoio/src/cap_ffmpeg_impl.hpp:2008:12: error: use of undeclared identifier 'av_stream_get_side_data'\n 2008 |     data = av_stream_get_side_data(video_st, AV_PKT_DATA_DISPLAYMATRIX, NULL);\n      |            ^\n3 errors generated.",
+    "relevant_files": [
+      "modules/imgproc/src/shapedescr.cpp",
+      "modules/imgproc/test/test_convhull.cpp"
+    ],
+    "error_type": "compiler_error",
+    "source": "github",
+    "repo": "opencv/opencv",
+    "issue_url": "https://github.com/opencv/opencv/issues/27907"
+  },
+  {
+    "id": "opencv_opencv-issue-24535",
+    "log": "Thread 1 \"app\" received signal SIGSEGV, Segmentation fault.\r\n    0x00007ffff65dc755 in icv_l9_ownDistanceTransform_5x5_8u32f_C1R_21B_g9e9 () from /home/dkurtaev/opencv_install/bin/../lib/libopencv_imgproc.so.408\r\n    (gdb) bt\r\n    #0  0x00007ffff65dc755 in icv_l9_ownDistanceTransform_5x5_8u32f_C1R_21B_g9e9 () from /home/dkurtaev/opencv_install/bin/../lib/libopencv_imgproc.so.408\r\n    #1  0x00007ffff659e8df in icv_l9_ippiDistanceTransform_5x5_8u32f_C1R () from /home/dkurtaev/opencv_install/bin/../lib/libopencv_imgproc.so.408\r\n    #2  0x00007ffff5c390f0 in cv::distanceTransform (_src=..., _dst=..., _labels=..., distType=2, maskSize=5, labelType=1) at /home/dkurtaev/opencv/modules/imgproc/src/distransform.cpp:854\r\n    #3  0x00007ffff5c396ef in cv::distanceTransform (_src=..., _dst=..., distanceType=2, maskSize=5, dstType=5) at /home/dkurtaev/opencv/modules/imgproc/src/distransform.cpp:903\r\n    #4  0x000055555555669e in main (argc=1, argv=0x7fffffffdef8) at /home/dkurtaev/main.cpp:18",
+    "relevant_files": [
+      "modules/imgproc/src/distransform.cpp"
+    ],
+    "error_type": "segfault",
+    "source": "github",
+    "repo": "opencv/opencv",
+    "issue_url": "https://github.com/opencv/opencv/pull/24535"
+  },
+  {
+    "id": "opencv_opencv-issue-27352",
+    "log": "[1]    11096 segmentation fault (core dumped)  ./bug",
+    "relevant_files": [
+      "modules/dnn/src/net_impl.cpp"
+    ],
+    "error_type": "segfault",
+    "source": "github",
+    "repo": "opencv/opencv",
+    "issue_url": "https://github.com/opencv/opencv/issues/27352"
+  },
+  {
+    "id": "opencv_opencv-issue-26936",
+    "log": "➜  cross-build gdb ./opencv_test_core \nGNU gdb (Bianbu 15.0.50.20240403-0ubuntu1bb2) 15.0.50.20240403-git\nCopyright (C) 2024 Free Software Foundation, Inc.\nLicense GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>\nThis is free software: you are free to change and redistribute it.\nThere is NO WARRANTY, to the extent permitted by law.\nType \"show copying\" and \"show warranty\" for details.\nThis GDB was configured as \"riscv64-linux-gnu\".\nType \"show configuration\" for configuration details.\nFor bug reporting instructions, please see:\n<https://www.gnu.org/software/gdb/bugs/>.\nFind the GDB manual and other documentation resources online at:\n    <http://www.gnu.org/software/gdb/documentation/>.\n\nFor help, type \"help\".\nType \"apropos word\" to search for commands related to \"word\"...\nReading symbols from ./opencv_test_core...\n(gdb) run --gtest_filter=\"*Scale*\"\nStarting program: /home/opencv/cross-build/opencv_test_core --gtest_filter=\"*Scale*\"\n[Thread debugging using libthread_db enabled]\nUsing host libthread_db library \"/lib/riscv64-linux-gnu/libthread_db.so.1\".\nCTEST_FULL_OUTPUT\nOpenCV version: 4.12.0-dev\nOpenCV VCS version: 4.11.0-146-g680fd4d975-dirty\nBuild type: Release\nCompiler: /mnt/Projects/spacemit/spacemit-toolchain-linux-glibc-x86_64-v1.0.4/bin/riscv64-unknown-linux-gnu-g++  (ver 14.2.1)\nAlgorithm hint: ALGO_HINT_ACCURATE\nHAL: YES (HAL RVV (ver 0.0.1))\nParallel framework: pthreads (nthreads=8)\nCPU features: RVV\nTEST: Skip tests with tags: 'mem_6gb', 'verylong'\nNote: Google Test filter = *Scale*\n[==========] Running 4 tests from 4 test cases.\n[----------] Global test environment set-up.\n[----------] 1 test from Core_ConvertScale/ElemWiseTest\n[ RUN      ] Core_ConvertScale/ElemWiseTest.accuracy/0, where GetParam() = 16-byte object <F0-99 5F-00 00-00 00-00 70-9B 5F-00 00-00 00-00>\n\nProgram received signal SIGSEGV, Segmentation fault.\n0x0000003ff74994ea in cv::cpu_baseline::cvtScale8s64f(unsigned char const*, unsigned long, unsigned char const*, unsigned long, unsigned char*, unsigned long, cv::Size_<int>, void*) () from /home/opencv/cross-build/libopencv_core.so.412\n(gdb) bt\n#0  0x0000003ff74994ea in cv::cpu_baseline::cvtScale8s64f(unsigned char const*, unsigned long, unsigned char const*, unsigned long, unsigned char*, unsigned long, cv::Size_<int>, void*) () from /home/opencv/cross-build/libopencv_core.so.412\n#1  0x0000003ff74942f4 in cv::Mat::convertTo(cv::_OutputArray const&, int, double, double) const () from /home/opencv/cross-build/libopencv_core.so.412\n#2  0x000000000006bc84 in opencv_test::(anonymous namespace)::ConvertScaleOp::op(std::vector<cv::Mat, std::allocator<cv::Mat> > const&, cv::Mat&, cv::Mat const&) ()\n#3  0x0000000000089b02 in opencv_test::(anonymous namespace)::ElemWiseTest_accuracy_Test::Body() ()\n#4  0x0000000000089f46 in opencv_test::(anonymous namespace)::ElemWiseTest_accuracy_Test::TestBody() ()\n#5  0x000000000043ab4c in void testing::internal::HandleExceptionsInMethodIfSupported<testing::Test, void>(testing::Test*, void (testing::Test::*)(), char const*) ()\n#6  0x000000000043ad24 in testing::Test::Run() ()\n#7  0x000000000043af62 in testing::TestInfo::Run() ()\n#8  0x000000000043afe4 in testing::TestCase::Run() ()\n#9  0x000000000043b5fe in testing::internal::UnitTestImpl::RunAllTests() ()\n#10 0x000000000043b72a in testing::UnitTest::Run() ()\n#11 0x000000000004c5a8 in main ()",
+    "relevant_files": [
+      "modules/core/include/opencv2/core/hal/intrin_rvv_scalable.hpp",
+      "modules/core/src/convert.simd.hpp",
+      "modules/core/src/convert_scale.simd.hpp",
+      "modules/core/test/test_intrin_utils.hpp"
+    ],
+    "error_type": "segfault",
+    "source": "github",
+    "repo": "opencv/opencv",
+    "issue_url": "https://github.com/opencv/opencv/issues/26936"
+  },
+  {
+    "id": "opencv_opencv-issue-25675",
+    "log": "/Users/thewoz/Dropbox/Research/Github/thewoz/opencv/modules/calib3d/src/usac/essential_solver.cpp:265:13: error: no matching function for call to 'dgeev_'\r\n            OCV_LAPACK_FUNC(dgeev)(&jobvl, &jobvr, &mat_order, action_mat_data, &lda, wr, wi, eig_vecs, &ldvl,\r\n            ^~~~~~~~~~~~~~~~~~~~~~\r\n/Users/thewoz/Dropbox/Research/Github/thewoz/opencv/build/opencv_lapack.h:25:28: note: expanded from macro 'OCV_LAPACK_FUNC'\r\n#define OCV_LAPACK_FUNC(f) f##_\r\n                           ^~~~\r\n<scratch space>:66:1: note: expanded from here\r\ndgeev_\r\n^~~~~~\r\n/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX14.5.sdk/System/Library/Frameworks/vecLib.framework/Headers/lapack.h:23405:1: note: candidate function not viable: no known conversion from 'int *' to 'const __LAPACK_int * _Nonnull' (aka 'const long *') for 3rd argument\r\ndgeev_(\r\n^\r\n1 error generated.\r\nmake[2]: *** [modules/calib3d/CMakeFiles/opencv_calib3d.dir/src/usac/essential_solver.cpp.o] Error 1",
+    "relevant_files": [
+      "modules/core/src/minmax.cpp"
+    ],
+    "error_type": "compiler_error",
+    "source": "github",
+    "repo": "opencv/opencv",
+    "issue_url": "https://github.com/opencv/opencv/issues/25675"
+  },
+  {
+    "id": "opencv_opencv-issue-22892",
+    "log": "$ PYTHONFAULTHANDLER=1 python3 crash_repo.py\r\nFatal Python error: Segmentation fault\r\n\r\nCurrent thread 0x00007fd41ab83740 (most recent call first):\r\n  File \"/xxx/crash_repo.py\", line 5 in <module>\r\n\r\nExtension modules: numpy.core._multiarray_umath, numpy.core._multiarray_tests, numpy.linalg._umath_linalg, numpy.fft._pocketfft_internal, numpy.random._common, numpy.random.bit_generator, numpy.random._bounded_integers, numpy.random._mt19937, numpy.random.mtrand, numpy.random._philox, numpy.random._pcg64, numpy.random._sfc64, numpy.random._generator, cv2 (total: 14)\r\nSegmentation fault (core dumped)",
+    "relevant_files": [
+      "modules/videoio/include/opencv2/videoio.hpp",
+      "modules/videoio/src/cap.cpp",
+      "modules/videoio/src/cap_ffmpeg.cpp",
+      "modules/videoio/src/cap_interface.hpp",
+      "modules/videoio/test/test_ffmpeg.cpp",
+      "modules/videoio/test/test_orientation.cpp"
+    ],
+    "error_type": "segfault",
+    "source": "github",
+    "repo": "opencv/opencv",
+    "issue_url": "https://github.com/opencv/opencv/issues/22892"
+  }
+]
