@@ -87,6 +87,35 @@ def test_cmake_index_parses_absl_cc_library_blocks(tmp_path):
     assert "strings" in targets[0].links
 
 
+def test_cmake_index_parses_project_specific_cc_macro_blocks(tmp_path):
+    repo_root = tmp_path / "repo"
+    engine_dir = repo_root / "src" / "engine"
+    engine_dir.mkdir(parents=True)
+    (engine_dir / "solver.cpp").write_text("void solve() {}\n", encoding="utf-8")
+    (engine_dir / "solver.h").write_text("void solve();\n", encoding="utf-8")
+    (engine_dir / "CMakeLists.txt").write_text(
+        "cadence_cc_library(\n"
+        "  NAME\n"
+        "    timing_solver\n"
+        "  SRCS\n"
+        "    solver.cpp\n"
+        "  HDRS\n"
+        "    solver.h\n"
+        "  DEPS\n"
+        "    core::graph\n"
+        ")\n",
+        encoding="utf-8",
+    )
+
+    index = CMakeProjectIndex.from_repo(repo_root)
+
+    targets = index.get_targets_for_file("src/engine/solver.cpp")
+    assert len(targets) == 1
+    assert targets[0].name == "timing_solver"
+    assert targets[0].kind == "library"
+    assert "graph" in targets[0].links
+
+
 def test_cmake_index_checks_transitive_target_reachability(tmp_path):
     repo_root = tmp_path / "repo"
     src_dir = repo_root / "src"

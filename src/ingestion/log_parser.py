@@ -177,7 +177,7 @@ _RE_CMAKE_TARGET = re.compile(
     r"CMakeFiles[\\/](?P<target>[^\\/]+)\.dir[\\/](?P<path>.+?\.(?:cc|cpp|h|hpp|c|cxx|hxx))(?:\.pic)?\.o\b"
 )
 _RE_BUILD_COMPONENT_DIR = re.compile(
-    r"cd\s+[^\n]*?/(absl/[A-Za-z0-9_./-]+)\s*(?:&&|$)"
+    r"(?:^|\b)cd\s+([^\n&;]+?)\s*(?:&&|;|$)"
 )
 
 # Ordered list used by extract_error_type — first match wins.
@@ -572,11 +572,7 @@ def extract_source_paths(
         if "/" in candidate or "\\" in candidate:
             raw_paths.add(candidate)
 
-    component_prefixes: List[str] = []
-    for match in _RE_BUILD_COMPONENT_DIR.finditer(log_text):
-        prefix = match.group(1).replace("\\", "/").strip("/")
-        if prefix and prefix not in component_prefixes:
-            component_prefixes.append(prefix)
+    component_prefixes = _extract_build_component_prefixes(log_text, repo_root=repo_root)
 
     normalized: set = set()
     for raw in raw_paths:
@@ -608,9 +604,9 @@ def extract_source_paths(
                         if best is None or len(rel) > len(best):
                             best = rel
 
-            # Build-system context expansion:
-            # e.g. "internal/flag.cc" + "absl/flags" -> "absl/flags/internal/flag.cc"
-            if best is None and component_prefixes and raw_slash and not raw_slash.startswith("absl/"):
+            # Build-system context expansion for mirrored build directories:
+            # e.g. "internal/flag.cc" + "absl/flags" -> "absl/flags/internal/flag.cc".
+            if best is None and component_prefixes and raw_slash:
                 for prefix in component_prefixes:
                     prefixed = f"{prefix.rstrip('/')}/{raw_slash.lstrip('/')}"
                     candidate = resolved_root / prefixed
@@ -629,6 +625,48 @@ def extract_source_paths(
         normalized.add(best)
 
     return sorted(normalized)
+
+
+def _extract_build_component_prefixes(
+    log_text: str,
+    repo_root: Optional[Path] = None,
+) -> List[str]:
+    """Infer source-tree prefixes from build command working directories.
+
+    CMake/Ninja logs often enter a mirrored build directory before showing an
+    object path, for example ``cd /tmp/build/project/src/core && ...`` followed
+    by ``CMakeFiles/app.dir/internal/foo.cc.o``.  The object path alone may be
+    too short, so we try suffixes of the working directory as candidate source
+    prefixes and later validate them against ``repo_root``.
+    """
+    prefixes: List[str] = []
+    resolved_root = Path(repo_root).resolve() if repo_root is not None else None
+
+    for match in _RE_BUILD_COMPONENT_DIR.finditer(log_text):
+        cwd = match.group(1).strip().strip('"').strip("'")
+        cwd = cwd.replace("\\", "/").rstrip("/")
+        if not cwd:
+            continue
+
+        candidates: List[str] = []
+        cwd_path = Path(cwd)
+        if resolved_root is not None:
+            try:
+                rel = cwd_path.resolve().relative_to(resolved_root)
+                candidates.append(str(rel).replace("\\", "/"))
+            except (OSError, ValueError):
+                pass
+
+        parts = [part for part in cwd.split("/") if part and part not in {".", ".."}]
+        for index in range(len(parts)):
+            candidates.append("/".join(parts[index:]))
+
+        for candidate in candidates:
+            candidate = candidate.strip("/")
+            if candidate and candidate not in prefixes:
+                prefixes.append(candidate)
+
+    return prefixes
 
 
 def _normalize_log_text(log_text: str) -> str:

@@ -669,6 +669,19 @@ class TestSourcePathExtraction:
         paths = extract_source_paths(self.LOG_CMAKE_OBJECT_PATH, repo_root=tmp_path)
         assert "absl/flags/internal/flag.cc" in paths
 
+    def test_cmake_object_path_uses_generic_component_context(self, tmp_path):
+        target = tmp_path / "src" / "engine" / "internal" / "solver.cpp"
+        target.parent.mkdir(parents=True)
+        target.touch()
+        log = (
+            "cd /tmp/build/company_project/src/engine && /usr/bin/c++ ... "
+            "CMakeFiles/solver.dir/internal/solver.cpp.o ...\n"
+        )
+
+        paths = extract_source_paths(log, repo_root=tmp_path)
+
+        assert "src/engine/internal/solver.cpp" in paths
+
 
 class TestBuildTargetExtraction:
     LOG = (

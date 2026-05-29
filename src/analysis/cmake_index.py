@@ -67,7 +67,7 @@ class CMakeProjectIndex:
                             for link in target.links:
                                 if link not in existing.links:
                                     existing.links.append(link)
-                elif lowered in {"absl_cc_library", "absl_cc_test", "absl_cc_binary"}:
+                elif _looks_like_named_cc_macro(lowered):
                     target = _parse_macro_target(
                         args,
                         command_name=lowered,
@@ -224,7 +224,7 @@ def _parse_macro_target(
     repo_root: Path,
     rel_dir: str,
 ) -> Optional[CMakeTarget]:
-    """Parse absl-style macro targets with NAME/SRCS/HDRS/DEPS blocks."""
+    """Parse named C/C++ target macros with NAME/SRCS/HDRS/DEPS blocks."""
     tokens = _tokenize_cmake_args(args)
     if not tokens:
         return None
@@ -252,11 +252,7 @@ def _parse_macro_target(
     ]
     sources = [source for source in sources if source]
     links = [_normalize_target_token(token) for token in fields.get("DEPS", []) if _looks_like_target_ref(token)]
-    kind = {
-        "absl_cc_library": "library",
-        "absl_cc_test": "test",
-        "absl_cc_binary": "executable",
-    }.get(command_name, "macro")
+    kind = _macro_target_kind(command_name)
     return CMakeTarget(
         name=name,
         kind=kind,
@@ -320,6 +316,33 @@ def _looks_like_target_ref(token: str) -> bool:
     if _looks_like_source(value):
         return False
     return "::" in value or re.match(r"^[A-Za-z0-9_.:+-]+$", value) is not None
+
+
+def _looks_like_named_cc_macro(command_name: str) -> bool:
+    """Return True for project-specific C/C++ CMake target wrappers.
+
+    Large C++ repos often wrap CMake target creation in macros such as
+    absl_cc_library, project_cc_test, or company_cc_binary.  Supporting the
+    common NAME/SRCS/HDRS/DEPS shape keeps build reasoning repo-agnostic while
+    still avoiding arbitrary macro parsing.
+    """
+    value = command_name.lower()
+    return bool(
+        value.endswith(("_cc_library", "_cc_test", "_cc_binary"))
+        or value in {"cc_library", "cc_test", "cc_binary"}
+    )
+
+
+def _macro_target_kind(command_name: str) -> str:
+    """Map a target-wrapper macro name to a coarse target kind."""
+    value = command_name.lower()
+    if value.endswith("_cc_test") or value == "cc_test":
+        return "test"
+    if value.endswith("_cc_binary") or value == "cc_binary":
+        return "executable"
+    if value.endswith("_cc_library") or value == "cc_library":
+        return "library"
+    return "macro"
 
 
 def _resolve_source_token(token: str, cmake_dir: Path, repo_root: Path) -> str:
