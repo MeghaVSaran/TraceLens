@@ -1,5 +1,5 @@
 """
-DebugAid CLI — main entry point.
+DebugAid CLI - main entry point.
 
 Commands:
   debugaid index  --repo PATH [--force-reindex]
@@ -166,6 +166,37 @@ def _format_retrieval_signals_text(parsed_log, source_paths=None) -> list[str]:
     return lines
 
 
+def _format_crash_report_text(report) -> list[str]:
+    """Render crash triage output for terminal use."""
+    lines = [
+        "Crash analysis:",
+        f"  Type:             {report.crash_type}",
+        f"  Summary:          {report.summary}",
+        f"  Likely cause:     {report.likely_cause}",
+        f"  Confidence:       {report.confidence}",
+    ]
+    if report.crash_frame:
+        frame = report.crash_frame
+        location = f"{frame.file_path}:{frame.line_number}" if frame.file_path else "unknown location"
+        lines.append(f"  Crash frame:      #{frame.index} {frame.function} at {location}")
+    if report.suspicious_frames:
+        lines.append("  Suspicious frames:")
+        for frame in report.suspicious_frames:
+            location = f"{frame.file_path}:{frame.line_number}" if frame.file_path else "unknown location"
+            lines.append(f"    - #{frame.index} {frame.function} at {location}")
+    if report.exact_matches:
+        lines.append("  Exact symbol matches:")
+        for match in report.exact_matches[:5]:
+            lines.append(f"    - {match}")
+    if report.evidence:
+        lines.append("  Evidence:")
+        for item in report.evidence:
+            lines.append(f"    - {item}")
+    if report.suggested_next_steps:
+        lines.append("  Suggested next steps:")
+        for item in report.suggested_next_steps:
+            lines.append(f"    - {item}")
+    return lines
 def _run_command_capture(command: tuple[str, ...], stream_output: bool = True) -> tuple[int, str]:
     """Run a subprocess, optionally streaming merged stdout/stderr."""
     process = subprocess.Popen(
@@ -192,7 +223,7 @@ def _run_command_capture(command: tuple[str, ...], stream_output: bool = True) -
 
 @click.group()
 def cli():
-    """DebugAid — map C++ error logs to relevant source code."""
+    """DebugAid - map C++ error logs to relevant source code."""
     pass
 
 
@@ -378,6 +409,79 @@ def query(log_path, repo, top_k, verbose, explain_retrieval, output, diagnose, b
         click.echo(f"Error during query: {exc}", err=True)
         sys.exit(1)
 
+
+# ------------------------------------------------------------------
+# ANALYZE-CRASH command
+# ------------------------------------------------------------------
+
+@cli.command("analyze-crash")
+@click.option("--log", "log_path", required=True, type=click.Path(exists=True), help="Path to GDB/ASan/UBSan crash log.")
+@click.option("--repo", required=True, type=click.Path(exists=True), help="Path to indexed C++ repository.")
+@click.option("--top-k", default=5, show_default=True, help="Number of retrieval results to use as evidence.")
+@click.option("--build-dir", default=None, type=click.Path(exists=True), help="Optional build directory containing compile_commands.json.")
+@click.option("--output", default="text", type=click.Choice(["text", "json"]), help="Output format.")
+@click.option("--verbose", is_flag=True, default=False, help="Show ranked retrieval evidence after crash analysis.")
+def analyze_crash_cmd(log_path, repo, top_k, build_dir, output, verbose):
+    """Analyze a runtime crash report using stack/sanitizer evidence plus repo retrieval."""
+    try:
+        repo_path = Path(repo).resolve()
+        _require_index(repo_path)
+        log_text = Path(log_path).read_text(encoding="utf-8", errors="replace")
+
+        parsed_log, results, _diagnosis, _compile_commands_path, _source_paths = _triage_log(
+            repo_path=repo_path,
+            log_text=log_text,
+            top_k=top_k,
+            build_dir=build_dir,
+            diagnose=False,
+        )
+
+        from src.analysis.crash_analyzer import analyze_crash
+
+        report = analyze_crash(parsed_log, results, repo_root=repo_path)
+
+        if output == "json":
+            payload = {
+                "error_type": parsed_log.error_type,
+                "query": parsed_log.query_text(),
+                "crash_analysis": report.to_dict(),
+                "results": [
+                    {
+                        "rank": r.rank,
+                        "file_path": r.file_path,
+                        "function_name": r.function_name,
+                        "start_line": r.start_line,
+                        "score": round(r.score, 4),
+                        "dense_score": round(r.dense_score, 4),
+                        "bm25_score": round(r.bm25_score, 4),
+                        "symbol_score": round(r.symbol_score, 4),
+                    }
+                    for r in results
+                ],
+            }
+            click.echo(json.dumps(payload, indent=2))
+            return
+
+        click.echo(f"\nError type: {parsed_log.error_type}")
+        click.echo(f"Query: {parsed_log.query_text()[:120]}")
+        click.echo()
+        for line in _format_crash_report_text(report):
+            click.echo(line)
+
+        if verbose:
+            click.echo(f"\nTop {len(results)} retrieval results:\n")
+            for r in results:
+                click.echo(f"  #{r.rank}  {r.file_path}:{r.start_line}")
+                click.echo(f"       Function: {r.function_name}")
+                click.echo(
+                    f"       Score: {r.score:.4f} "
+                    f"(dense={r.dense_score:.4f}, bm25={r.bm25_score:.4f}, symbol={r.symbol_score:.4f})"
+                )
+                click.echo()
+
+    except Exception as exc:
+        click.echo(f"Error during crash analysis: {exc}", err=True)
+        sys.exit(1)
 
 # ------------------------------------------------------------------
 # WATCH command
@@ -636,3 +740,5 @@ def info(repo):
 
 if __name__ == "__main__":
     cli()
+
+

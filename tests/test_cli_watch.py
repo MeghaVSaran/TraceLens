@@ -95,3 +95,43 @@ def test_query_explain_retrieval_prints_parsed_signals(tmp_path, monkeypatch):
     assert "Identifiers : absl::StrCat" in result.output
     assert "BM25 lexical + dense vector" in result.output
     assert "dense=0.3000, bm25=0.8000, symbol=0.2000" in result.output
+
+
+def test_analyze_crash_prints_report(tmp_path, monkeypatch):
+    repo_root = tmp_path / "repo"
+    (repo_root / ".debugaid").mkdir(parents=True)
+    log_path = tmp_path / "asan.txt"
+    log_path.write_text(
+        "==1==ERROR: AddressSanitizer: heap-use-after-free on address 0x1\n"
+        "#0 0x1 in absl::StrCat absl/strings/str_cat.cc:42\n",
+        encoding="utf-8",
+    )
+
+    def fake_triage(repo_path, log_text, top_k, build_dir=None, diagnose=False):
+        parsed = _FakeParsedLog(
+            error_type="asan_error",
+            identifiers=["absl::StrCat"],
+            stack_frames=["#0 0x1 in absl::StrCat absl/strings/str_cat.cc:42"],
+        )
+        parsed.raw_log = log_text
+        return parsed, [_FakeRetrievalResult()], None, None, []
+
+    monkeypatch.setattr("src.cli.main._triage_log", fake_triage)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "analyze-crash",
+            "--log",
+            str(log_path),
+            "--repo",
+            str(repo_root),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Crash analysis" in result.output
+    assert "heap-use-after-free" in result.output
+    assert "Suggested next steps" in result.output
+
