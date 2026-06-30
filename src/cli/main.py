@@ -122,7 +122,7 @@ def _triage_log(
         )
         diagnosis = diagnoser.diagnose(parsed_log, results)
 
-    return parsed_log, results, diagnosis, compile_commands_path
+    return parsed_log, results, diagnosis, compile_commands_path, source_paths
 
 
 def _format_diagnosis_text(diagnosis) -> list[str]:
@@ -142,6 +142,27 @@ def _format_diagnosis_text(diagnosis) -> list[str]:
         lines.append("  Evidence:")
         for item in diagnosis.evidence:
             lines.append(f"    - {item}")
+    return lines
+
+
+def _format_retrieval_signals_text(parsed_log, source_paths=None) -> list[str]:
+    """Render parsed retrieval signals for demo/debug output."""
+    source_paths = list(source_paths or getattr(parsed_log, "source_paths", []) or [])
+    fields = [
+        ("Error type", getattr(parsed_log, "error_type", "")),
+        ("Identifiers", ", ".join(getattr(parsed_log, "identifiers", [])[:5])),
+        ("Source paths", ", ".join(source_paths[:5])),
+        ("File hints", ", ".join(getattr(parsed_log, "file_hints", [])[:5])),
+        ("Build targets", ", ".join(getattr(parsed_log, "build_targets", [])[:5])),
+    ]
+    stack_frames = list(getattr(parsed_log, "stack_frames", []) or [])
+    if stack_frames:
+        fields.append(("Stack frames", f"{len(stack_frames)} frame(s), first: {stack_frames[0][:100]}"))
+
+    lines = ["Parsed retrieval signals:"]
+    for label, value in fields:
+        lines.append(f"  {label:<12}: {value or '-'}")
+    lines.append("  Retrieval   : BM25 lexical + dense vector + symbol/path-aware hybrid ranking")
     return lines
 
 
@@ -278,10 +299,11 @@ def index(repo, force_reindex, device, include_tests, embedding_model):
 @click.option("--repo", required=True, type=click.Path(exists=True), help="Path to indexed C++ repository.")
 @click.option("--top-k", default=5, show_default=True, help="Number of results to return.")
 @click.option("--verbose", is_flag=True, default=False, help="Show scores and matched code snippets.")
+@click.option("--explain-retrieval", is_flag=True, default=False, help="Show parsed log signals and score components for demos/debugging.")
 @click.option("--output", default="text", type=click.Choice(["text", "json"]), help="Output format.")
 @click.option("--diagnose", is_flag=True, default=False, help="Add build-aware diagnosis if compile_commands.json is available.")
 @click.option("--build-dir", default=None, type=click.Path(exists=True), help="Optional build directory containing compile_commands.json.")
-def query(log_path, repo, top_k, verbose, output, diagnose, build_dir):
+def query(log_path, repo, top_k, verbose, explain_retrieval, output, diagnose, build_dir):
     """Query: given a log file, return the most likely source files."""
     try:
         repo_path = Path(repo).resolve()
@@ -290,7 +312,7 @@ def query(log_path, repo, top_k, verbose, output, diagnose, build_dir):
         # 1. Read log file.
         log_text = Path(log_path).read_text(encoding="utf-8", errors="replace")
 
-        parsed_log, results, diagnosis, compile_commands_path = _triage_log(
+        parsed_log, results, diagnosis, compile_commands_path, source_paths = _triage_log(
             repo_path=repo_path,
             log_text=log_text,
             top_k=top_k,
@@ -333,12 +355,16 @@ def query(log_path, repo, top_k, verbose, output, diagnose, build_dir):
             click.echo(f"Query: {parsed_log.query_text()[:120]}")
             if diagnose and compile_commands_path:
                 click.echo(f"Compile DB: {compile_commands_path}")
+            if explain_retrieval:
+                click.echo()
+                for line in _format_retrieval_signals_text(parsed_log, source_paths=source_paths):
+                    click.echo(line)
             click.echo(f"\nTop {len(results)} results:\n")
 
             for r in results:
                 click.echo(f"  #{r.rank}  {r.file_path}:{r.start_line}")
                 click.echo(f"       Function: {r.function_name}")
-                if verbose:
+                if verbose or explain_retrieval:
                     click.echo(f"       Score: {r.score:.4f} "
                                f"(dense={r.dense_score:.4f}, bm25={r.bm25_score:.4f}, "
                                f"symbol={r.symbol_score:.4f})")
@@ -393,7 +419,7 @@ def watch(repo, top_k, build_dir, output, quiet_build_output, command):
                 click.echo("\nCommand completed successfully. No failure triage needed.")
             return
 
-        parsed_log, results, diagnosis, compile_commands_path = _triage_log(
+        parsed_log, results, diagnosis, compile_commands_path, _source_paths = _triage_log(
             repo_path=repo_path,
             log_text=log_text,
             top_k=top_k,
