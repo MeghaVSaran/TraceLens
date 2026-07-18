@@ -1,0 +1,4 @@
+interface:
+  display_name: "DebugAid C++ Debugger"
+  short_description: "Build and validate evidence-first C++ debugging"
+  default_prompt: "Use $debugaid-cpp-debugger to implement the next evidence-backed DebugAid capability and validate it safely."

@@ -133,5 +133,5 @@ def test_analyze_crash_prints_report(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert "Crash analysis" in result.output
     assert "heap-use-after-free" in result.output
-    assert "Suggested next steps" in result.output
+    assert "Suggested checks" in result.output
 

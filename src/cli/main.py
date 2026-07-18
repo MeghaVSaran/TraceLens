@@ -179,24 +179,42 @@ def _format_crash_report_text(report) -> list[str]:
         frame = report.crash_frame
         location = f"{frame.file_path}:{frame.line_number}" if frame.file_path else "unknown location"
         lines.append(f"  Crash frame:      #{frame.index} {frame.function} at {location}")
+    if report.freed_by_frames:
+        lines.append("  ASan freed-by stack:")
+        for frame in report.freed_by_frames[:3]:
+            location = f"{frame.file_path}:{frame.line_number}" if frame.file_path else "unknown location"
+            lines.append(f"    - #{frame.index} {frame.function} at {location}")
+    if report.allocated_by_frames:
+        lines.append("  ASan allocated-by stack:")
+        for frame in report.allocated_by_frames[:3]:
+            location = f"{frame.file_path}:{frame.line_number}" if frame.file_path else "unknown location"
+            lines.append(f"    - #{frame.index} {frame.function} at {location}")
     if report.suspicious_frames:
         lines.append("  Suspicious frames:")
         for frame in report.suspicious_frames:
             location = f"{frame.file_path}:{frame.line_number}" if frame.file_path else "unknown location"
-            lines.append(f"    - #{frame.index} {frame.function} at {location}")
-    if report.exact_matches:
-        lines.append("  Exact symbol matches:")
-        for match in report.exact_matches[:5]:
-            lines.append(f"    - {match}")
+            lines.append(f"    - score={frame.score:.3f} #{frame.index} {frame.function} at {location}")
+    if report.rg_evidence:
+        lines.append("  rg evidence:")
+        for function, files in report.rg_evidence.items():
+            lines.append(f"    - {function}: {', '.join(files[:5])}")
     if report.evidence:
         lines.append("  Evidence:")
         for item in report.evidence:
             lines.append(f"    - {item}")
-    if report.suggested_next_steps:
-        lines.append("  Suggested next steps:")
-        for item in report.suggested_next_steps:
+    if report.suggested_checks:
+        lines.append("  Suggested checks:")
+        for item in report.suggested_checks:
             lines.append(f"    - {item}")
+    if report.tool_evidence:
+        lines.append("  Native tool evidence:")
+        for item in report.tool_evidence:
+            tool = item.get("tool", "tool")
+            status = item.get("status", "unknown")
+            duration = item.get("duration_ms", 0)
+            lines.append(f"    - {tool}: status={status}, duration={duration}ms")
     return lines
+
 def _run_command_capture(command: tuple[str, ...], stream_output: bool = True) -> tuple[int, str]:
     """Run a subprocess, optionally streaming merged stdout/stderr."""
     process = subprocess.Popen(
@@ -415,18 +433,47 @@ def query(log_path, repo, top_k, verbose, explain_retrieval, output, diagnose, b
 # ------------------------------------------------------------------
 
 @cli.command("analyze-crash")
-@click.option("--log", "log_path", required=True, type=click.Path(exists=True), help="Path to GDB/ASan/UBSan crash log.")
+@click.option("--log", "log_path", default=None, type=click.Path(exists=True), help="Path to GDB/ASan/UBSan crash log.")
 @click.option("--repo", required=True, type=click.Path(exists=True), help="Path to indexed C++ repository.")
+@click.option("--binary", default=None, type=click.Path(exists=True, dir_okay=False), help="Debug binary for GDB core analysis.")
+@click.option("--core", "core_path", default=None, type=click.Path(exists=True, dir_okay=False), help="Core dump for GDB analysis.")
+@click.option("--gdb", "gdb_path", default=None, type=click.Path(exists=True, dir_okay=False), help="Optional explicit GDB executable.")
+@click.option("--gdb-timeout", default=20.0, show_default=True, type=click.FloatRange(min=0.1), help="GDB collection timeout in seconds.")
 @click.option("--top-k", default=5, show_default=True, help="Number of retrieval results to use as evidence.")
 @click.option("--build-dir", default=None, type=click.Path(exists=True), help="Optional build directory containing compile_commands.json.")
 @click.option("--output", default="text", type=click.Choice(["text", "json"]), help="Output format.")
 @click.option("--verbose", is_flag=True, default=False, help="Show ranked retrieval evidence after crash analysis.")
-def analyze_crash_cmd(log_path, repo, top_k, build_dir, output, verbose):
+def analyze_crash_cmd(log_path, repo, binary, core_path, gdb_path, gdb_timeout, top_k, build_dir, output, verbose):
     """Analyze a runtime crash report using stack/sanitizer evidence plus repo retrieval."""
     try:
         repo_path = Path(repo).resolve()
-        _require_index(repo_path)
-        log_text = Path(log_path).read_text(encoding="utf-8", errors="replace")
+        if not log_path and not (binary and core_path):
+            raise click.UsageError("Provide --log or both --binary and --core.")
+        if bool(binary) != bool(core_path):
+            raise click.UsageError("--binary and --core must be provided together.")
+
+        log_parts = []
+        tool_evidence = []
+        if log_path:
+            log_parts.append(Path(log_path).read_text(encoding="utf-8", errors="replace"))
+        if binary and core_path:
+            from src.analysis.debugger_tools import collect_gdb_core_evidence
+
+            gdb_evidence = collect_gdb_core_evidence(
+                Path(binary),
+                Path(core_path),
+                gdb_path=gdb_path,
+                timeout_seconds=gdb_timeout,
+            )
+            tool_evidence.append(gdb_evidence)
+            if gdb_evidence.stdout.strip():
+                log_parts.append(gdb_evidence.stdout)
+            elif not log_path:
+                raise click.ClickException(
+                    f"GDB evidence collection failed with status '{gdb_evidence.status}': "
+                    f"{gdb_evidence.stderr or 'no debugger output'}"
+                )
+        log_text = "\n\n".join(log_parts)
 
         parsed_log, results, _diagnosis, _compile_commands_path, _source_paths = _triage_log(
             repo_path=repo_path,
@@ -438,7 +485,12 @@ def analyze_crash_cmd(log_path, repo, top_k, build_dir, output, verbose):
 
         from src.analysis.crash_analyzer import analyze_crash
 
-        report = analyze_crash(parsed_log, results, repo_root=repo_path)
+        report = analyze_crash(
+            parsed_log,
+            results,
+            repo_root=repo_path,
+            tool_evidence=tool_evidence,
+        )
 
         if output == "json":
             payload = {
