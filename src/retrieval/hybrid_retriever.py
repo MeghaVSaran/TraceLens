@@ -30,6 +30,12 @@ TEST_PATH_HINTS = (
     "_test.", "_unittest.", "test_", "/test/", "/tests/", "_benchmark.", "_bench.",
 )
 TEST_FILE_PENALTY = 0.18
+RUNTIME_MEMORY_ERROR_TYPES = {
+    "segfault",
+    "asan_error",
+    "ubsan_error",
+    "memory_leak",
+}
 
 
 @dataclass
@@ -493,7 +499,7 @@ class HybridRetriever:
                 sparse_weight = 0.92 if has_identifiers else 0.84
             elif error_type in {"compiler_error", "include_error", "template_error", "build_system_error"}:
                 sparse_weight = 0.86 if has_identifiers else 0.78
-            elif error_type in {"segfault", "asan_error"}:
+            elif error_type in RUNTIME_MEMORY_ERROR_TYPES:
                 sparse_weight = 0.80 if (has_stack or has_identifiers) else 0.70
             elif error_type == "runtime_exception":
                 sparse_weight = 0.72 if has_identifiers else 0.64
@@ -503,7 +509,7 @@ class HybridRetriever:
         if error_type in {"compiler_error", "linker_error", "include_error", "template_error", "build_system_error"}:
             sparse_weight = 0.80 if has_identifiers else 0.72
             dense_weight = 1.0 - sparse_weight
-        elif error_type in {"segfault", "asan_error", "runtime_exception"}:
+        elif error_type == "runtime_exception" or error_type in RUNTIME_MEMORY_ERROR_TYPES:
             sparse_weight = 0.65 if (has_stack or has_identifiers) else 0.58
             dense_weight = 1.0 - sparse_weight
 
@@ -559,7 +565,10 @@ class HybridRetriever:
             }
 
             error_type = getattr(parsed_log, "error_type", "unknown")
-            strict_symbol_mode = strict_pathless and error_type in {"linker_error", "segfault", "asan_error"}
+            strict_symbol_mode = strict_pathless and (
+                error_type == "linker_error"
+                or error_type in RUNTIME_MEMORY_ERROR_TYPES
+            )
 
             if strict_symbol_mode:
                 if function_name in full_identifiers:
@@ -712,7 +721,7 @@ class HybridRetriever:
                 return 0.98 if has_identifiers else 0.92
             if error_type in {"compiler_error", "include_error", "template_error", "build_system_error"}:
                 return 0.95 if has_identifiers else 0.90
-            if error_type in {"segfault", "asan_error"}:
+            if error_type in RUNTIME_MEMORY_ERROR_TYPES:
                 return 0.92 if (has_identifiers or has_stack) else 0.86
             if error_type == "runtime_exception":
                 return 0.86
@@ -720,7 +729,7 @@ class HybridRetriever:
 
         if error_type in {"compiler_error", "include_error", "template_error", "build_system_error", "linker_error"}:
             return 0.90 if has_identifiers else 0.84
-        if error_type in {"segfault", "asan_error"} and (has_identifiers or has_stack):
+        if error_type in RUNTIME_MEMORY_ERROR_TYPES and (has_identifiers or has_stack):
             return 0.84
         return 0.0
 
@@ -768,7 +777,7 @@ class HybridRetriever:
         if strict_pathless:
             if error_type in {"linker_error", "compiler_error", "include_error", "template_error"}:
                 return 0.52
-            if error_type in {"segfault", "asan_error"}:
+            if error_type in RUNTIME_MEMORY_ERROR_TYPES:
                 return 0.48
             return 0.50
         if error_type in {"linker_error", "compiler_error", "include_error", "template_error"}:

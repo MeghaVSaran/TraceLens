@@ -76,8 +76,22 @@ def test_to_strict_pathless_parsed_strips_path_hints():
 
     assert strict.source_paths == []
     assert all("/" not in hint and "\\" not in hint for hint in strict.file_hints)
-    assert "str_cat.cc" in strict.file_hints
+    assert strict.file_hints == []
+    assert "str_cat.cc" not in strict.query_text()
     assert "/tmp/abseil/" not in strict.error_message
+
+
+def test_strict_pathless_removes_paths_with_spaces_and_filename_tokens():
+    parsed = parse_log(
+        "/Users/dev/opencv-4.12.0 2/modules/core/src/convert.cpp:10:2: error: bad conversion\n"
+        "fatal error: include/missing.hpp: No such file or directory\n"
+    )
+
+    strict = _to_strict_pathless_parsed(parsed)
+
+    assert "convert.cpp" not in strict.raw_log
+    assert "missing.hpp" not in strict.raw_log
+    assert strict.file_hints == []
 
 
 def test_run_single_config_passes_strict_pathless_to_retriever():

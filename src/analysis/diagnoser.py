@@ -75,7 +75,7 @@ class FailureDiagnoser:
             return self._diagnose_linker(parsed_log, results, primary_files, compile_entry)
         if error_type == "compiler_error":
             return self._diagnose_compiler(parsed_log, results, primary_files, compile_entry)
-        if error_type in {"segfault", "asan_error"}:
+        if error_type in {"segfault", "asan_error", "ubsan_error", "memory_leak"}:
             return self._diagnose_memory(parsed_log, results, primary_files, compile_entry)
         if error_type == "build_system_error":
             return self._diagnose_build_system(parsed_log, results, primary_files, compile_entry)

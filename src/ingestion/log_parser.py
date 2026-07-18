@@ -2,8 +2,8 @@
 Log Parser — Regex-based C++ error log extractor.
 
 Parses raw build/runtime log text into structured ParsedLog objects.
-Handles 8 error categories: linker, compiler, include, template, segfault,
-asan_error, build_system_error, runtime_exception.
+Handles 10 error categories: linker, compiler, include, template, segfault,
+ASan, UBSan, memory leak, build-system error, and runtime exception.
 
 See docs/2_system_architecture.md §2 for spec.
 """
@@ -23,6 +23,8 @@ ERROR_TYPES = {
     "template_error",
     "segfault",
     "asan_error",
+    "ubsan_error",
+    "memory_leak",
     "build_system_error",
     "runtime_exception",
     "unknown",
@@ -128,6 +130,12 @@ _RE_ASAN_STACK_OVERFLOW = re.compile(
 _RE_ASAN_GENERIC = re.compile(
     r"AddressSanitizer", re.IGNORECASE,
 )
+_RE_UBSAN = re.compile(
+    r"(?:UndefinedBehaviorSanitizer|runtime error:)", re.IGNORECASE,
+)
+_RE_LSAN = re.compile(
+    r"(?:LeakSanitizer|detected memory leaks)", re.IGNORECASE,
+)
 
 # --- build_system_error ---
 _RE_CMAKE_FIND = re.compile(
@@ -187,6 +195,8 @@ _ERROR_PATTERNS = [
     ("asan_error", _RE_ASAN_HEAP_OVERFLOW),
     ("asan_error", _RE_ASAN_USE_AFTER_FREE),
     ("asan_error", _RE_ASAN_STACK_OVERFLOW),
+    ("memory_leak", _RE_LSAN),
+    ("ubsan_error", _RE_UBSAN),
     ("asan_error", _RE_ASAN_GENERIC),
     ("build_system_error", _RE_CMAKE_FIND),
     ("build_system_error", _RE_MAKE_NO_RULE),
@@ -292,8 +302,8 @@ def extract_error_type(log_text: str) -> str:
 
     Returns:
         One of: linker_error, compiler_error, include_error,
-                template_error, segfault, asan_error,
-                build_system_error, runtime_exception, unknown.
+                template_error, segfault, asan_error, ubsan_error,
+                memory_leak, build_system_error, runtime_exception, unknown.
     """
     log_text = _normalize_log_text(log_text)
     for error_type, pattern in _ERROR_PATTERNS:
@@ -454,6 +464,8 @@ def _pick_error_message(log_text: str, error_type: str) -> str:
             _RE_ASAN_HEAP_OVERFLOW, _RE_ASAN_USE_AFTER_FREE,
             _RE_ASAN_STACK_OVERFLOW, _RE_ASAN_GENERIC,
         ],
+        "ubsan_error": [_RE_UBSAN],
+        "memory_leak": [_RE_LSAN],
         "build_system_error": [_RE_CMAKE_FIND, _RE_MAKE_NO_RULE, _RE_CMAKE_ERROR],
         "runtime_exception": [_RE_TERMINATE_THROW, _RE_STD_EXCEPTION, _RE_WHAT],
     }

@@ -22,14 +22,13 @@ BOUNDS_KEYWORDS = [
 ]
 CPP_SUFFIXES = {".cc", ".cpp", ".cxx", ".c", ".h", ".hpp", ".hxx"}
 
-_FRAME_RE = re.compile(
-    r"^#\s*(?P<index>\d+)\s+"
-    r"(?:0x[0-9a-fA-F]+\s+)?"
-    r"(?:in\s+)?(?P<function>[A-Za-z_~][A-Za-z0-9_:<>~*]*)"
-    r".*?(?:\s+at\s+|\s+)(?P<file>[\w./\\-]+\.(?:cc|cpp|cxx|c|h|hpp|hxx))"
-    r"(?::(?P<line>\d+))?",
+_FRAME_PREFIX_RE = re.compile(r"^#\s*(?P<index>\d+)\s+(?P<body>.+)$")
+_FRAME_FILE_RE = re.compile(
+    r"(?P<file>[\w./\\-]+\.(?:cc|cpp|cxx|c|h|hpp|hxx))"
+    r"(?::(?P<line>\d+))?(?::\d+)?(?:\s|$)"
 )
 _FRAME_START_RE = re.compile(r"^#\s*\d+\b")
+_FRAME_ADDRESS_RE = re.compile(r"^(?:0x[0-9a-fA-F]+)\s+")
 
 
 @dataclass
@@ -42,6 +41,7 @@ class CrashFrame:
     line_number: int = 0
     raw: str = ""
     score: float = 0.0
+    evidence_source: str = "crash"
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -175,6 +175,9 @@ def _parse_asan_stacks(raw_log: str, fallback_frames: list[str]) -> tuple[list[C
 
     for line in raw_log.splitlines():
         lower = line.lower()
+        if "direct leak of" in lower or "indirect leak of" in lower:
+            current = "allocated"
+            continue
         if "freed by thread" in lower:
             current = "freed"
             continue
@@ -193,25 +196,54 @@ def _parse_asan_stacks(raw_log: str, fallback_frames: list[str]) -> tuple[list[C
     if not crash_raw and fallback_frames:
         crash_raw = fallback_frames
 
-    return _parse_frames(crash_raw), _parse_frames(freed_raw), _parse_frames(allocated_raw)
+    return (
+        _parse_frames(crash_raw, "crash"),
+        _parse_frames(freed_raw, "freed"),
+        _parse_frames(allocated_raw, "allocated"),
+    )
 
 
-def _parse_frames(raw_frames: list[str]) -> list[CrashFrame]:
+def _parse_frames(raw_frames: list[str], evidence_source: str = "crash") -> list[CrashFrame]:
+    """Parse symbolized and partial frames without discarding unknown locations."""
     frames: list[CrashFrame] = []
     for raw in raw_frames:
-        match = _FRAME_RE.search(raw.strip())
-        if not match:
+        stripped = raw.strip()
+        prefix = _FRAME_PREFIX_RE.search(stripped)
+        if not prefix:
             continue
+        body = prefix.group("body")
+        locations = list(_FRAME_FILE_RE.finditer(body))
+        location = locations[-1] if locations else None
+        function_text = body[:location.start()] if location else body
+        function = _clean_frame_function(function_text)
         frames.append(
             CrashFrame(
-                index=int(match.group("index")),
-                function=match.group("function"),
-                file_path=(match.group("file") or "").replace("\\", "/"),
-                line_number=int(match.group("line") or 0),
-                raw=raw.strip(),
+                index=int(prefix.group("index")),
+                function=function,
+                file_path=(location.group("file") if location else "").replace("\\", "/"),
+                line_number=int(location.group("line") or 0) if location else 0,
+                raw=stripped,
+                evidence_source=evidence_source,
             )
         )
     return frames
+
+
+def _clean_frame_function(value: str) -> str:
+    value = _FRAME_ADDRESS_RE.sub("", (value or "").strip())
+    if value.startswith("in "):
+        value = value[3:]
+    value = re.sub(r"\s+at\s*$", "", value).strip()
+    value = re.sub(r"\s+\([^)]*=.*$", "", value).strip()
+    if value.startswith("operator delete"):
+        return "operator delete[]" if "delete[]" in value else "operator delete"
+    if value.startswith("operator new"):
+        return "operator new[]" if "new[]" in value else "operator new"
+    if "(" in value:
+        value = value.split("(", 1)[0].strip()
+    if not value or value.startswith(("??", "(", "[")):
+        return "unknown"
+    return value
 
 
 def _score_suspicious_frames(
@@ -246,9 +278,11 @@ def _score_suspicious_frames(
             base += 0.1
         if crash_type == "heap-use-after-free" and source == "freed":
             base += 0.2
+        if _is_runtime_frame(frame):
+            base -= 0.35
 
         scored = candidates.get(key)
-        score = round(base, 3)
+        score = round(max(0.0, base), 3)
         if scored is None or score > scored.score:
             candidates[key] = CrashFrame(
                 index=frame.index,
@@ -257,6 +291,7 @@ def _score_suspicious_frames(
                 line_number=frame.line_number,
                 raw=frame.raw,
                 score=score,
+                evidence_source=source,
             )
 
     for frame in crash_frames:
@@ -438,8 +473,9 @@ def _normalize_tool_evidence(items: Optional[Iterable[object]]) -> list[dict]:
 
 
 def _summary(crash_type: str, crash_frame: Optional[CrashFrame], freed_by_frames: list[CrashFrame], results: list[RetrievalResult]) -> str:
-    if crash_type == "heap-use-after-free" and freed_by_frames:
-        return f"{crash_type} with ASan free-stack evidence near {freed_by_frames[0].function}."
+    free_frame = _select_free_frame(freed_by_frames)
+    if crash_type == "heap-use-after-free" and free_frame:
+        return f"{crash_type} with ASan free-stack evidence near {free_frame.function}."
     if crash_frame:
         return f"{crash_type} triaged around frame #{crash_frame.index} {crash_frame.function}."
     if results:
@@ -474,8 +510,9 @@ def _confidence(
     freed_by_frames: list[CrashFrame],
     suspicious_frames: list[CrashFrame],
 ) -> str:
-    if crash_type == "heap-use-after-free" and freed_by_frames:
-        if any(_keyword_bonus(frame.function) >= 0.3 for frame in freed_by_frames):
+    actionable_free_frame = _select_user_ownership_frame(freed_by_frames)
+    if crash_type == "heap-use-after-free" and actionable_free_frame:
+        if _keyword_bonus(actionable_free_frame.function) >= 0.3:
             return "high"
     if crash_frame and not freed_by_frames and len(suspicious_frames) <= 1:
         return "low"
@@ -493,7 +530,8 @@ def _suggested_checks(
 ) -> list[str]:
     checks: list[str] = []
     if crash_type == "heap-use-after-free":
-        free_function = freed_by_frames[0].function if freed_by_frames else "the free/reset path"
+        free_frame = _select_free_frame(freed_by_frames)
+        free_function = free_frame.function if free_frame else "the free/reset path"
         object_type = _infer_object_type(crash_frame, freed_by_frames)
         checks.append(f"Inspect object lifetime of {object_type} after {free_function}")
         if freed_by_frames:
@@ -505,6 +543,15 @@ def _suggested_checks(
         else:
             checks.append("Verify index bounds at the crash frame")
         checks.append("Check caller-provided size, capacity, count, and offset values")
+    elif crash_type == "ubsan_error":
+        if crash_frame and crash_frame.file_path:
+            checks.append(f"Inspect the reported undefined operation at {crash_frame.file_path}:{crash_frame.line_number}")
+        else:
+            checks.append("Inspect the operation named in the UBSan runtime error")
+        checks.append("Validate operand ranges and conversions at the first user-code frame")
+    elif crash_type == "memory_leak":
+        checks.append("Inspect the first user-code allocation frame and every ownership exit path")
+        checks.append("Check early returns, exceptions, and container ownership for a missing release")
     elif crash_type == "segfault":
         checks.append("Compile with -fsanitize=address for more precise information")
         if crash_frame and crash_frame.file_path:
@@ -513,6 +560,42 @@ def _suggested_checks(
         checks.append("Inspect the crash frame, then move upward through callers until the bad state is introduced")
         checks.append("Rerun with ASan/UBSan/GDB backtrace if this log lacks stack detail")
     return checks[:4]
+
+
+def _select_free_frame(frames: list[CrashFrame]) -> Optional[CrashFrame]:
+    user_frames = [frame for frame in frames if not _is_runtime_frame(frame)]
+    ownership_frames = [
+        frame for frame in user_frames
+        if _keyword_bonus(frame.function) >= 0.3
+    ]
+    if ownership_frames:
+        return ownership_frames[0]
+    if user_frames:
+        return user_frames[0]
+    return None
+
+
+def _select_user_ownership_frame(frames: list[CrashFrame]) -> Optional[CrashFrame]:
+    """Return a non-runtime frame with an ownership signal, if available."""
+    return next(
+        (
+            frame
+            for frame in frames
+            if not _is_runtime_frame(frame) and _keyword_bonus(frame.function) >= 0.3
+        ),
+        None,
+    )
+
+
+def _is_runtime_frame(frame: CrashFrame) -> bool:
+    function = (frame.function or "").lower()
+    path = (frame.file_path or "").replace("\\", "/").lower()
+    if function.startswith(("operator delete", "operator new", "__asan", "__ubsan", "__interceptor")):
+        return True
+    return any(
+        marker in path
+        for marker in ("libsanitizer", "compiler-rt", "asan_", "ubsan_", "sanitizer_")
+    )
 
 
 def _infer_object_type(crash_frame: Optional[CrashFrame], freed_by_frames: list[CrashFrame]) -> str:

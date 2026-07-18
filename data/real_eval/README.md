@@ -52,3 +52,18 @@ python -m src.evaluation.run_ablation --dataset data/real_eval/opencv_opencv.jso
 ## Training Gate
 
 Do not train a model yet. First build a reliable multi-repo eval set with at least 300-500 high-quality real samples, including EDA-like repos. Then compare BM25, dense, hybrid, reranker, and any trained model on held-out repos.
+
+## Multi-Repository Matrix Run
+
+After indexing the repositories under one directory, run the same benchmark independently and keep each report separate:
+
+```bash
+python scripts/evaluate_repo_matrix.py \
+  --manifest data/real_eval/manifest.json \
+  --repos-root /tmp \
+  --output-dir data/multi_repo_eval \
+  --strict-pathless \
+  --skip-missing-ground-truth
+```
+
+The matrix marks repositories as `ok`, `missing_repo`, `missing_index`, `missing_dataset`, `failed`, or `timeout`. It does not convert unavailable repositories into zero scores. Strict-pathless mode removes source paths and filenames completely before retrieval; it does not preserve basenames.

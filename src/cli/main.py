@@ -193,7 +193,10 @@ def _format_crash_report_text(report) -> list[str]:
         lines.append("  Suspicious frames:")
         for frame in report.suspicious_frames:
             location = f"{frame.file_path}:{frame.line_number}" if frame.file_path else "unknown location"
-            lines.append(f"    - score={frame.score:.3f} #{frame.index} {frame.function} at {location}")
+            lines.append(
+                f"    - score={frame.score:.3f} source={frame.evidence_source} "
+                f"#{frame.index} {frame.function} at {location}"
+            )
     if report.rg_evidence:
         lines.append("  rg evidence:")
         for function, files in report.rg_evidence.items():
@@ -495,12 +498,12 @@ def analyze_crash_cmd(log_path, repo, binary, core_path, gdb_path, gdb_timeout, 
                 log_parts.append("Native symbol evidence:\n" + symbol_context)
         log_text = "\n\n".join(log_parts)
 
-        parsed_log, results, _diagnosis, _compile_commands_path, _source_paths = _triage_log(
+        parsed_log, results, diagnosis, compile_commands_path, _source_paths = _triage_log(
             repo_path=repo_path,
             log_text=log_text,
             top_k=top_k,
             build_dir=build_dir,
-            diagnose=False,
+            diagnose=True,
         )
 
         from src.analysis.crash_analyzer import analyze_crash
@@ -516,7 +519,9 @@ def analyze_crash_cmd(log_path, repo, binary, core_path, gdb_path, gdb_timeout, 
             payload = {
                 "error_type": parsed_log.error_type,
                 "query": parsed_log.query_text(),
+                "compile_commands_path": str(compile_commands_path) if compile_commands_path else "",
                 "crash_analysis": report.to_dict(),
+                "diagnosis": diagnosis.to_dict() if diagnosis else None,
                 "results": [
                     {
                         "rank": r.rank,
@@ -539,6 +544,11 @@ def analyze_crash_cmd(log_path, repo, binary, core_path, gdb_path, gdb_timeout, 
         click.echo()
         for line in _format_crash_report_text(report):
             click.echo(line)
+
+        if diagnosis:
+            click.echo()
+            for line in _format_diagnosis_text(diagnosis):
+                click.echo(line)
 
         if verbose:
             click.echo(f"\nTop {len(results)} retrieval results:\n")
@@ -748,6 +758,66 @@ def eval_cmd(dataset, repo, repo_filter):
 
 
 # ------------------------------------------------------------------
+# EVAL-RUNTIME command
+# ------------------------------------------------------------------
+
+@cli.command("eval-runtime")
+@click.option("--dataset", required=True, type=click.Path(exists=True), help="Path to runtime triage ground truth JSON.")
+@click.option("--repo", default=None, type=click.Path(exists=True), help="Optional C++ repository root for path normalization and rg evidence.")
+@click.option("--output", default="text", type=click.Choice(["text", "json"]), help="Output format.")
+def eval_runtime_cmd(dataset, repo, output):
+    """Evaluate sanitizer/crash evidence localization without retrieval or an LLM."""
+    try:
+        from src.evaluation.runtime_metrics import (
+            evaluate_runtime_cases,
+            load_runtime_cases,
+        )
+
+        cases = load_runtime_cases(Path(dataset))
+        report = evaluate_runtime_cases(
+            cases,
+            repo_root=Path(repo).resolve() if repo else None,
+        )
+        if output == "json":
+            click.echo(json.dumps(report, indent=2))
+            return
+
+        summary = report["summary"]
+        click.echo("\nRuntime Triage Evaluation")
+        click.echo(f"  Evaluated:                 {summary['evaluated_cases']}/{summary['total_cases']}")
+        click.echo(f"  Excluded:                  {summary['excluded_cases']}")
+        for label, key in (
+            ("Crash type accuracy", "crash_type_accuracy"),
+            ("Positive parse coverage", "positive_parse_coverage"),
+            ("Crash frame recall", "crash_frame_recall"),
+            ("Crash file recall", "crash_file_recall"),
+            ("Free stack recall", "free_stack_recall"),
+            ("Allocation stack recall", "allocation_stack_recall"),
+            ("Suspicious frame recall", "suspicious_frame_recall"),
+            ("Clean false-positive rate", "clean_false_positive_rate"),
+            ("Complete case accuracy", "complete_case_accuracy"),
+        ):
+            value = summary[key]
+            display = "n/a" if value is None else f"{value:.4f}"
+            click.echo(f"  {label + ':':<27} {display}")
+
+        failures = [case for case in report["cases"] if not case["complete_case_correct"]]
+        if failures:
+            click.echo("  Failed cases:")
+            for case in failures:
+                click.echo(
+                    f"    - {case['id']}: expected={case['expected_crash_type']} "
+                    f"predicted={case['predicted_crash_type']}"
+                )
+        if report["exclusions"]:
+            click.echo("  Exclusions:")
+            for exclusion in report["exclusions"]:
+                click.echo(f"    - {exclusion['id']}: {exclusion['reason']}")
+    except Exception as exc:
+        click.echo(f"Error during runtime evaluation: {exc}", err=True)
+        sys.exit(1)
+
+# ------------------------------------------------------------------
 # INFO command
 # ------------------------------------------------------------------
 
@@ -812,5 +882,4 @@ def info(repo):
 
 if __name__ == "__main__":
     cli()
-
 

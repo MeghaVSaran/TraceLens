@@ -90,43 +90,29 @@ def _looks_like_path_hint(value: str) -> bool:
 
 
 def _strip_path_tokens(text: str) -> str:
-    """Remove slash-based path tokens from free text."""
+    """Remove path and source-file hints without preserving their basenames."""
     if not text:
         return text
     kept_tokens: List[str] = []
     for token in text.split():
         core = token.strip("`'\"()[]{}:,;")
-        if _looks_like_path_hint(core):
-            basename = _basename_from_path_hint(core)
-            if basename:
-                kept_tokens.append(basename)
+        if _looks_like_path_hint(core) or _looks_like_source_filename(core):
             continue
         kept_tokens.append(token)
     return " ".join(kept_tokens).strip()
 
 
-def _basename_from_path_hint(value: str) -> str:
-    """Convert a path-like hint into a filename token."""
-    if not value:
-        return ""
-    candidate = value.strip().strip("`'\"()[]{}:,;")
-    candidate = candidate.replace("\\", "/")
+def _looks_like_source_filename(value: str) -> bool:
+    """Return True for a C/C++ filename, including a line/column suffix."""
+    candidate = str(value or "").strip().strip("`'\"()[]{}:,;")
     candidate = re.sub(r":\d+(?::\d+)?$", "", candidate)
-    candidate = re.sub(r"(?:\.pic)?\.o$", "", candidate)
-    name = Path(candidate).name
-    return name if name else ""
+    return bool(re.search(r"\.(?:c|cc|cpp|cxx|h|hh|hpp|hxx)$", candidate, re.IGNORECASE))
 
 
 def _to_strict_pathless_parsed(parsed):
     """Clone ParsedLog with all path-like hints removed."""
+    # Strict mode must not retain the filename extracted from a path.
     cleaned_hints: List[str] = []
-    for hint in list(getattr(parsed, "file_hints", [])) + list(getattr(parsed, "source_paths", [])):
-        if _looks_like_path_hint(hint):
-            basename = _basename_from_path_hint(hint)
-            if basename and basename not in cleaned_hints:
-                cleaned_hints.append(basename)
-        elif hint and hint not in cleaned_hints:
-            cleaned_hints.append(hint)
     return replace(
         parsed,
         raw_log=_strip_path_tokens(getattr(parsed, "raw_log", "")),
