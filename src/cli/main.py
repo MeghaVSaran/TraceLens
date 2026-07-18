@@ -263,9 +263,14 @@ def cli():
 @click.option("--force-reindex", is_flag=True, default=False, help="Rebuild index even if it exists.")
 @click.option("--device", default="cpu", type=click.Choice(["cpu", "cuda"]), help="Device for embedding.")
 @click.option("--include-tests", is_flag=True, default=False, help="Include test/benchmark files in index.")
+@click.option("--path-prefix", "path_prefixes", multiple=True,
+              help="Index only this repo-relative directory/file prefix; repeatable.")
+@click.option("--embedding-batch-size", default=16, show_default=True,
+              type=click.IntRange(1, 256),
+              help="Chunks encoded per embedding batch.")
 @click.option("--embedding-model", default="mpnet", type=click.Choice(["mpnet", "graphcodebert"]),
               help="Embedding backend (mpnet=shared space, graphcodebert=original).")
-def index(repo, force_reindex, device, include_tests, embedding_model):
+def index(repo, force_reindex, device, include_tests, path_prefixes, embedding_batch_size, embedding_model):
     """Index a C++ repository for log-to-code retrieval."""
     try:
         import torch
@@ -298,7 +303,14 @@ def index(repo, force_reindex, device, include_tests, embedding_model):
         click.echo("Parsing C++ files...")
         if not include_tests:
             click.echo("  (excluding test/benchmark files; use --include-tests to keep them)")
-        chunks = parse_repository(repo_path, include_tests=include_tests)
+        chunks = parse_repository(
+            repo_path,
+            include_tests=include_tests,
+            path_prefixes=list(path_prefixes),
+            progress_callback=lambda files, chunks: click.echo(
+                f"  Parsed {files} files ({chunks} chunks found)"
+            ),
+        )
         if not chunks:
             click.echo("No C++ files found in repository.", err=True)
             sys.exit(1)
@@ -309,8 +321,6 @@ def index(repo, force_reindex, device, include_tests, embedding_model):
 
         click.echo(f"Embedding code chunks with {embedding_model} backend...")
         embedder = CodeEmbedder(backend=embedding_model, device=device)
-        embeddings = embedder.embed_chunks(chunks)
-        click.echo(f"  Embedded {len(embeddings)} chunks")
 
         # 3. Build vector index.
         from src.indexing.vector_index import VectorIndex
@@ -320,7 +330,14 @@ def index(repo, force_reindex, device, include_tests, embedding_model):
 
         click.echo("Building vector index...")
         vector_index = VectorIndex(chroma_path)
-        vector_index.build(chunks, embeddings)
+        vector_index.reset()
+        for start in range(0, len(chunks), embedding_batch_size):
+            batch = chunks[start:start + embedding_batch_size]
+            embeddings = embedder.embed_chunks(batch, batch_size=embedding_batch_size)
+            vector_index.add(batch, embeddings)
+            click.echo(
+                f"  Embedded {min(start + len(batch), len(chunks))}/{len(chunks)} chunks"
+            )
 
         # 4. Build BM25 index.
         from src.indexing.bm25_index import BM25Index
@@ -336,6 +353,8 @@ def index(repo, force_reindex, device, include_tests, embedding_model):
             "model_name": embedder.model_name,
             "num_chunks": len(chunks),
             "include_tests": include_tests,
+            "path_prefixes": list(path_prefixes),
+            "embedding_batch_size": embedding_batch_size,
             "indexed_at": datetime.now().isoformat(),
         })
 

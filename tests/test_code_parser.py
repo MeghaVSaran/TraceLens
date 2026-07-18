@@ -239,6 +239,18 @@ int gamma(int x) { return x; }
         assert "b.cpp" in paths
 
 
+    def test_path_prefix_filters_repository(self, tmp_path, cpp_parser):
+        (tmp_path / "src").mkdir()
+        (tmp_path / "third_party").mkdir()
+        _write_cpp(tmp_path, "src/keep.cpp", self.CODE_A)
+        _write_cpp(tmp_path, "third_party/skip.cpp", self.CODE_B)
+        chunks = parse_repository(
+            tmp_path,
+            parser=cpp_parser,
+            path_prefixes=["src"],
+        )
+        assert {chunk.file_path for chunk in chunks} == {"src/keep.cpp"}
+
 # ---------------------------------------------------------------------------
 # 8. File-level fallback chunk
 # ---------------------------------------------------------------------------

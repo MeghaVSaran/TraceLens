@@ -9,7 +9,7 @@ See docs/2_system_architecture.md §1 for spec.
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional
 import logging
 import re
 
@@ -61,6 +61,8 @@ def parse_repository(
     repo_path: Path,
     parser: tree_sitter.Parser = None,
     include_tests: bool = False,
+    path_prefixes: Optional[List[str]] = None,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> List[Chunk]:
     """Parse all C++ files in a repository into function-level chunks.
 
@@ -75,6 +77,9 @@ def parse_repository(
         parser: Optional pre-initialised tree-sitter Parser.
                 Uses the module-level ``_PARSER`` when *None*.
         include_tests: If True, include test/benchmark files.
+        path_prefixes: Optional repository-relative directory/file prefixes.
+                When provided, only paths under these prefixes are parsed.
+        progress_callback: Optional callback receiving files seen and chunks found.
 
     Returns:
         List of Chunk objects, one per function found.
@@ -82,22 +87,26 @@ def parse_repository(
     if parser is None:
         parser = _PARSER
     repo_path = Path(repo_path).resolve()
+    normalized_prefixes = _normalize_path_prefixes(path_prefixes)
     all_chunks: List[Chunk] = []
+    files_seen = 0
     files_parsed = 0
     files_skipped = 0
     files_fallback = 0
 
-    for ext in CPP_EXTENSIONS:
-        for file_path in repo_path.rglob(f"*{ext}"):
-            rel = str(file_path.relative_to(repo_path)).replace("\\", "/")
-            if not include_tests and _is_test_file(rel):
-                files_skipped += 1
-                continue
-            chunks = parse_file(file_path, repo_path, parser=parser)
-            if len(chunks) == 1 and chunks[0].function_name == "__file__":
-                files_fallback += 1
-            all_chunks.extend(chunks)
-            files_parsed += 1
+    for file_path in _iter_cpp_files(repo_path, normalized_prefixes):
+        files_seen += 1
+        if progress_callback and files_seen % 500 == 0:
+            progress_callback(files_seen, len(all_chunks))
+        rel = str(file_path.relative_to(repo_path)).replace("\\", "/")
+        if not include_tests and _is_test_file(rel):
+            files_skipped += 1
+            continue
+        chunks = parse_file(file_path, repo_path, parser=parser)
+        if len(chunks) == 1 and chunks[0].function_name == "__file__":
+            files_fallback += 1
+        all_chunks.extend(chunks)
+        files_parsed += 1
 
     if files_skipped:
         logger.info("Skipped %d test/benchmark files", files_skipped)
@@ -114,6 +123,37 @@ def parse_repository(
         files_fallback,
     )
     return all_chunks
+
+
+def _normalize_path_prefixes(path_prefixes: Optional[List[str]]) -> List[str]:
+    """Normalize user-provided repository-relative path prefixes."""
+    normalized: List[str] = []
+    for raw in path_prefixes or []:
+        value = str(raw or "").replace("\\", "/").strip("/")
+        if value and value not in normalized:
+            normalized.append(value)
+    return normalized
+
+def _iter_cpp_files(repo_path: Path, prefixes: List[str]):
+    """Yield selected C++ files without traversing unrelated subtrees."""
+    roots = [repo_path / prefix for prefix in prefixes] if prefixes else [repo_path]
+    seen: set[Path] = set()
+    for root in roots:
+        if root.is_file():
+            candidates = (root,) if root.suffix in CPP_EXTENSIONS else ()
+        elif root.is_dir():
+            candidates = (
+                file_path
+                for ext in CPP_EXTENSIONS
+                for file_path in root.rglob(f"*{ext}")
+            )
+        else:
+            candidates = ()
+        for file_path in candidates:
+            resolved = file_path.resolve()
+            if resolved not in seen:
+                seen.add(resolved)
+                yield file_path
 
 
 def parse_file(

@@ -67,6 +67,15 @@ class TestBuild:
         assert len(results) == 5
 
 
+    def test_add_supports_multiple_batches(self, tmp_path):
+        idx = VectorIndex(tmp_path / "chroma")
+        chunks, embeddings = _make_chunks_and_embeddings(4)
+        idx.reset()
+        idx.add(chunks[:2], embeddings[:2])
+        idx.add(chunks[2:], embeddings[2:])
+        assert len(idx.query(embeddings[0], top_k=10)) == 4
+
+
 class TestQuery:
     def test_returns_correct_fields(self, tmp_path):
         idx = VectorIndex(tmp_path / "chroma")

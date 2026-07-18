@@ -50,29 +50,31 @@ class VectorIndex:
     # ------------------------------------------------------------------
 
     def build(self, chunks: List, embeddings: List) -> None:
-        """Build or overwrite the index.
+        """Build or overwrite the index from parallel chunk and vector lists."""
+        self.reset()
+        self.add(chunks, embeddings)
+        logger.info("Built index: %d chunks in %s", len(chunks), self._persist_dir)
 
-        Creates (or replaces) the ``debugaid_code_chunks`` collection
-        and upserts every chunk with its embedding and metadata.
-
-        Args:
-            chunks: List of Chunk dataclass objects.
-            embeddings: Parallel list of 768-dim vectors (numpy arrays
-                        or lists of floats).
-        """
-        # Delete existing collection if present, then create fresh.
+    def reset(self) -> None:
+        """Delete and recreate the collection before an index rebuild."""
         try:
             self._client.delete_collection(COLLECTION_NAME)
             logger.info("Deleted existing collection '%s'.", COLLECTION_NAME)
         except Exception:
-            pass  # collection didn't exist — nothing to delete
+            pass
 
         self._collection = self._client.create_collection(
             name=COLLECTION_NAME,
             metadata={"hnsw:space": "cosine"},
         )
 
-        # Prepare parallel lists for ChromaDB upsert.
+    def add(self, chunks: List, embeddings: List) -> None:
+        """Add one bounded batch of chunks to the current collection."""
+        if self._collection is None:
+            self.reset()
+        if len(chunks) != len(embeddings):
+            raise ValueError("chunks and embeddings must have equal length")
+
         ids: List[str] = []
         metadatas: List[Dict] = []
         emb_lists: List[List[float]] = []
@@ -89,26 +91,19 @@ class VectorIndex:
                 "signature": getattr(chunk, "signature", ""),
                 "start_line": chunk.start_line,
             })
-            # Convert numpy array → list[float] if necessary.
             if isinstance(emb, np.ndarray):
                 emb_lists.append(emb.tolist())
             else:
                 emb_lists.append(list(emb))
 
-        # ChromaDB limits batch size; upsert in chunks of 5000.
         batch_size = 5000
-        batch_ranges = list(range(0, len(ids), batch_size))
-        for start in tqdm(batch_ranges, desc="Upserting chunks", unit="batch"):
+        for start in tqdm(range(0, len(ids), batch_size), desc="Upserting chunks", unit="batch"):
             end = start + batch_size
             self._collection.upsert(
                 ids=ids[start:end],
                 embeddings=emb_lists[start:end],
                 metadatas=metadatas[start:end],
             )
-
-        logger.info(
-            "Built index: %d chunks in %s", len(ids), self._persist_dir
-        )
 
     def query(
         self,

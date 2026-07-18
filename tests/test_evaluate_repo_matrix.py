@@ -41,6 +41,9 @@ def test_evaluate_manifest_preserves_success_and_missing_index_status(tmp_path, 
     repos_root = tmp_path / "repos"
     indexed_repo = repos_root / "llvm_llvm_project" / ".debugaid"
     indexed_repo.mkdir(parents=True)
+    (indexed_repo / "index_meta.json").write_text("{}", encoding="utf-8")
+    (indexed_repo / "bm25.pkl").write_bytes(b"index")
+    (indexed_repo / "chroma").mkdir()
     (repos_root / "opencv_opencv").mkdir(parents=True)
     output_dir = tmp_path / "reports"
 
