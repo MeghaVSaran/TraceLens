@@ -212,7 +212,13 @@ def _format_crash_report_text(report) -> list[str]:
             tool = item.get("tool", "tool")
             status = item.get("status", "unknown")
             duration = item.get("duration_ms", 0)
-            lines.append(f"    - {tool}: status={status}, duration={duration}ms")
+            version = item.get("version", "")
+            version_text = f", version={version}" if version else ""
+            lines.append(f"    - {tool}: status={status}, duration={duration}ms{version_text}")
+            for record in item.get("records", [])[:3]:
+                display = record.get("display", "")
+                if display:
+                    lines.append(f"      {display}")
     return lines
 
 def _run_command_capture(command: tuple[str, ...], stream_output: bool = True) -> tuple[int, str]:
@@ -473,6 +479,20 @@ def analyze_crash_cmd(log_path, repo, binary, core_path, gdb_path, gdb_timeout, 
                     f"GDB evidence collection failed with status '{gdb_evidence.status}': "
                     f"{gdb_evidence.stderr or 'no debugger output'}"
                 )
+        if binary and log_parts:
+            from src.analysis.symbol_tools import (
+                collect_native_symbol_evidence,
+                symbol_records_text,
+            )
+
+            symbol_evidence = collect_native_symbol_evidence(
+                Path(binary),
+                "\n\n".join(log_parts),
+            )
+            tool_evidence.extend(symbol_evidence)
+            symbol_context = symbol_records_text(symbol_evidence)
+            if symbol_context:
+                log_parts.append("Native symbol evidence:\n" + symbol_context)
         log_text = "\n\n".join(log_parts)
 
         parsed_log, results, _diagnosis, _compile_commands_path, _source_paths = _triage_log(

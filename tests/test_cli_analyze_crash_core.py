@@ -60,6 +60,10 @@ def test_analyze_crash_collects_gdb_core_evidence(tmp_path, monkeypatch):
         "src.analysis.debugger_tools.collect_gdb_core_evidence",
         fake_collect,
     )
+    monkeypatch.setattr(
+        "src.analysis.symbol_tools.collect_native_symbol_evidence",
+        lambda *_args, **_kwargs: [],
+    )
     monkeypatch.setattr("src.cli.main._triage_log", fake_triage)
 
     result = CliRunner().invoke(
