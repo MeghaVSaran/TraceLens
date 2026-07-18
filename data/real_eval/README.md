@@ -67,3 +67,61 @@ python scripts/evaluate_repo_matrix.py \
 ```
 
 The matrix marks repositories as `ok`, `missing_repo`, `missing_index`, `missing_dataset`, `failed`, or `timeout`. It does not convert unavailable repositories into zero scores. Strict-pathless mode removes source paths and filenames completely before retrieval; it does not preserve basenames.
+
+## Large-Repository Indexing
+
+The index command now supports repository-relative path prefixes and bounded
+embedding batches. Use prefixes for large monorepos so unrelated trees are not
+parsed. Run one indexing command to completion before starting the matrix.
+
+For the current 71-sample matrix on Colab, clone using the manifest slugs:
+
+    git clone --depth=1 https://github.com/abseil/abseil-cpp.git /tmp/abseil_abseil_cpp
+    git clone --depth=1 https://github.com/llvm/llvm-project.git /tmp/llvm_llvm_project
+    git clone --depth=1 https://github.com/opencv/opencv.git /tmp/opencv_opencv
+
+Start with tests excluded for LLVM; this is the reliable baseline:
+
+    python -m src.cli.main index \
+      --repo /tmp/llvm_llvm_project \
+      --device cuda \
+      --embedding-model mpnet \
+      --embedding-batch-size 64 \
+      --path-prefix clang \
+      --path-prefix clang-tools-extra \
+      --path-prefix compiler-rt \
+      --path-prefix flang \
+      --path-prefix libc \
+      --path-prefix libcxx \
+      --path-prefix lld \
+      --path-prefix lldb \
+      --path-prefix llvm \
+      --path-prefix mlir \
+      --force-reindex
+
+For OpenCV, index the modules tree and keep tests only if the run completes
+with sufficient memory:
+
+    python -m src.cli.main index \
+      --repo /tmp/opencv_opencv \
+      --device cuda \
+      --embedding-model mpnet \
+      --embedding-batch-size 64 \
+      --path-prefix modules \
+      --include-tests \
+      --force-reindex
+
+Evaluate only repositories that were cloned and indexed:
+
+    python scripts/evaluate_repo_matrix.py \
+      --manifest data/real_eval/manifest.json \
+      --repos-root /tmp \
+      --output-dir data/multi_repo_eval \
+      --repo-slug llvm_llvm_project \
+      --repo-slug opencv_opencv \
+      --strict-pathless \
+      --skip-missing-ground-truth
+
+A matrix row is incomplete_index when a previous interrupted indexing run
+left .debugaid without all required artifacts. Re-run indexing with
+--force-reindex rather than evaluating that row.

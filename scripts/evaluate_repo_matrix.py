@@ -55,6 +55,17 @@ def _tail(value: str) -> str:
     return "...\n" + value[-MAX_OUTPUT_CHARS:]
 
 
+def _index_status(repo_path: Path) -> tuple[str, str | None]:
+    """Distinguish a missing index from a directory left by a failed build."""
+    index_dir = repo_path / ".debugaid"
+    if not index_dir.is_dir():
+        return "missing_index", "Repository has no .debugaid index."
+    required = ("index_meta.json", "bm25.pkl", "chroma")
+    missing = [name for name in required if not (index_dir / name).exists()]
+    if missing:
+        return "incomplete_index", "Index is missing: " + ", ".join(missing)
+    return "ok", None
+
 def run_repo_ablation(
     *,
     dataset: Path,
@@ -161,19 +172,21 @@ def evaluate_manifest(
             result.update({"status": "missing_repo", "error": "Repository directory not found."})
         elif not dataset_path.is_file():
             result.update({"status": "missing_dataset", "error": "Dataset file not found."})
-        elif not (repo_path / ".debugaid").is_dir():
-            result.update({"status": "missing_index", "error": "Repository has no .debugaid index."})
         else:
-            repo_output = output_dir / slug
-            result.update(run_repo_ablation(
-                dataset=dataset_path,
-                repo=repo_path,
-                output_dir=repo_output,
-                strict_pathless=strict_pathless,
-                skip_missing_ground_truth=skip_missing_ground_truth,
-                timeout_seconds=timeout_seconds,
-            ))
-            result["output_dir"] = str(repo_output)
+            index_status, index_error = _index_status(repo_path)
+            if index_status != "ok":
+                result.update({"status": index_status, "error": index_error})
+            else:
+                repo_output = output_dir / slug
+                result.update(run_repo_ablation(
+                    dataset=dataset_path,
+                    repo=repo_path,
+                    output_dir=repo_output,
+                    strict_pathless=strict_pathless,
+                    skip_missing_ground_truth=skip_missing_ground_truth,
+                    timeout_seconds=timeout_seconds,
+                ))
+                result["output_dir"] = str(repo_output)
         repositories.append(result)
 
     status_counts: dict[str, int] = {}
